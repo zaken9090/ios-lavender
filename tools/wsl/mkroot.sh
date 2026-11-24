@@ -51,9 +51,30 @@ if [[ ! -f $work/base/tools/mkiosroot.sh || $(git -C "$work/base" rev-parse HEAD
 	git -C "$work/base" checkout -q FETCH_HEAD
 fi
 
+# Linux fsck_hfs keeps asking for a "minor" volume header repair right after repairing it (exit 8);
+# the images boot. Accept exactly that complaint, nothing else.
+check_hfs() {
+	fsck.hfsplus -f -y "$1" > /dev/null || true
+	local log rc=0
+	log=$(fsck.hfsplus -f -n "$1" 2>&1) || rc=$?
+	if ((rc)); then
+		if grep -q 'Volume header needs minor repair' <<< "$log" &&
+		   ! grep -vE '^\*\*|^   (Executing|The volume name|Volume header needs minor repair)|^\(1, 0\)$|^$' <<< "$log" | grep -q .; then
+			echo "fsck: only the known minor volume header note"
+		else
+			echo "$log"
+			return 1
+		fi
+	fi
+	echo "fsck: $1 OK"
+}
+
 img=$work/ios16-root.img
 rm -f "$img"
-bash "$work/base/tools/mkiosroot.sh" "$work/os.dmg" "$work/systemos.dmg" "$work/appos.dmg" "$img" "$size"
+# its own last step is that read-only fsck: checked again below
+bash "$work/base/tools/mkiosroot.sh" "$work/os.dmg" "$work/systemos.dmg" "$work/appos.dmg" "$img" "$size" ||
+	echo "mkiosroot.sh exit $?: checking the image"
+check_hfs "$img"
 mnt=$work/mnt
 mkdir -p "$mnt"
 mount -t hfsplus -o loop,force "$img" "$mnt"
@@ -61,7 +82,7 @@ trap 'umount "$mnt" 2>/dev/null || true' EXIT
 python3 "$work/base/tools/sweet-root-tweaks.py" "$mnt"
 umount "$mnt"
 trap - EXIT
-fsck.hfsplus -f -n "$img"
+check_hfs "$img"
 
 # 3. sparse image
 img2simg "$img" "$out.part"

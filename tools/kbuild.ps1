@@ -14,7 +14,11 @@ if (-not $OutRoot) { $OutRoot = Join-Path $PSScriptRoot "..\..\ci" }
 $head = (git -C $PSScriptRoot rev-parse HEAD).Trim()
 if ((git -C $PSScriptRoot rev-parse "origin/main").Trim() -ne $head) { throw "push main first" }
 
-function Get-Runs { gh run list -R $Repo -w xnu.yml -L 10 --json databaseId,headSha,status,conclusion,createdAt | ConvertFrom-Json }
+# PowerShell 5.1's ConvertFrom-Json emits a JSON array as ONE object: assign it, then enumerate.
+function Get-Runs {
+    $runs = gh run list -R $Repo -w xnu.yml -L 10 --json databaseId,headSha,status,conclusion,createdAt | ConvertFrom-Json
+    $runs | ForEach-Object { $_ }
+}
 
 $before = @(Get-Runs | ForEach-Object databaseId)
 foreach ($r in $Runners) { gh workflow run xnu.yml -R $Repo -f "runner=$r" | Out-Null }
