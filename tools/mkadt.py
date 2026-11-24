@@ -26,6 +26,7 @@ VTIMER_INTID = 19
 TIMEBASE = 19200000
 FB, FB_W, FB_H, FB_STRIDE = 0x9D400000, 1080, 2340, 1080 * 4
 FB_SIZE = (FB_STRIDE * FB_H + 0x3FFF) & ~0x3FFF
+EMMC, EMMC_CQ = 0x0C0C4000, 0x0C0C5000          # sdhc_1: hc_mem, cmdq_mem
 GOLD_MPIDR = (0x100, 0x101, 0x102, 0x103)       # the only cores with a 16K granule
 GOLD_HZ = 2208000000
 ECID = 0x4C4156454E000001                        # synthetic ("LAVEN" + 1), not the phone's
@@ -119,6 +120,12 @@ def build(product_path=None, seed=None):
         ("height", u32(FB_H)),
         ("stride", u32(FB_STRIDE)),
     ])
+    # Root storage (xnu patch 1002): the eMMC host, absolute addresses: hc_mem (SDHCI), cmdq_mem.
+    # The node name is the base series' (its driver was for UFS).
+    storage = node("sweet-ufs", [
+        ("compatible", cstr("qcom,sdhci-msm-v5")),
+        ("reg", u64(EMMC, 0x1000, EMMC_CQ, 0x1000)),
+    ])
     defaults = node("defaults", [("no-effaceable-storage", u32(1))])
     buttons = node("buttons", [
         ("button-names", cstr("volup", "voldown", "hold")),
@@ -142,7 +149,7 @@ def build(product_path=None, seed=None):
         ("manufacturer", cstr("Apple Inc.")),
         ("#address-cells", u32(2)),
         ("#size-cells", u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + extra)
+    ], [chosen, defaults, cpus, arm_io, fbcon, storage, buttons] + extra)
 
 
 if __name__ == "__main__":

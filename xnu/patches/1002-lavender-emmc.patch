@@ -1,0 +1,807 @@
+lavender: eMMC root device (rd=ufsroot0) through the SDHCI host
+
+- bsd/dev/sweet_ufs.c keeps its GPT lookup, BSD disk ufsroot0 and console log ring;
+  the UFS transport is replaced by polled SDHCI commands on the eMMC host at 0x0c0c4000
+  (sdhci-msm v5), data through one 64-bit ADMA2 descriptor per command (<= 60 KiB)
+- card state as ABL left it; EXT_CSD read for size and cache, user area selected,
+  CMD6 FLUSH_CACHE for DKIOCSYNCHRONIZE when the write cache is on
+- 4 KiB blocks above the transport; GPT in 512-byte sectors, both copies fenced and watched
+- the source change is made by xnu/src/mk_emmc.py from emmc_transport.c
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 143db60..ef66309 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1,6 +1,12 @@
+ /*
+  * SWEET internal UFS root device.
+  *
++ * lavender (Redmi Note 7): the storage is eMMC 5.1 behind Qualcomm's SDHCI host (sdhci-msm v5),
++ * not UFS. Only the transport below differs: polled SDHCI commands, data through one 64-bit
++ * ADMA2 descriptor per command (the host has no SDMA, and PIO does not drain its FIFO), card
++ * state as ABL left it (transfer state, its bus mode and clock). Block numbers above the
++ * transport stay in 4 KiB units; every GPT partition on lavender starts 4 KiB aligned.
++ *
+  * The Qualcomm UFS host (UFSHCI 2.1) is left enabled with the link up by the
+  * bootloader, which loaded our boot image from it. This driver reuses that
+  * state: it points the transfer request list at its own memory (verifying the
+@@ -54,61 +60,86 @@ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
+ 
+-#define REG_CAP         0x00
+-#define REG_IS          0x20
+-#define REG_IE          0x24
+-#define REG_HCS         0x30
+-#define REG_HCE         0x34
+-#define REG_UTRLBA      0x50
+-#define REG_UTRLBAU     0x54
+-#define REG_UTRLDBR     0x58
+-#define REG_UTRLCLR     0x5c
+-#define REG_UTRLRSR     0x60
+-
+-#define HCS_DP          (1u << 0)
+-#define HCS_UTRLRDY     (1u << 1)
+-#define CAP_64AS        (1u << 24)              /* 64-bit DMA addressing */
+-
+-#define UFS_BLOCK       4096u
+-#define BOUNCE_SIZE     (1u << 20)
+-#define PRDT_CHUNK      (256u << 10)            /* PRDT byte count field: 18 bits */
+-#define PRDT_MAX        (BOUNCE_SIZE / PRDT_CHUNK)
+-#define CMD_TIMEOUT_NS  (5ull * NSEC_PER_SEC)
+-#define CMD_SPIN_NS     (50ull * NSEC_PER_USEC)
+-#define CMD_SLEEP_NS    (200ull * NSEC_PER_USEC)
+-
+-struct utrd {
+-	uint32_t dw0, dw1, dw2, dw3;
+-	uint32_t ucdba, ucdbau;
+-	uint32_t resp;          /* [31:16] response UPIU offset, [15:0] length, DWORDs */
+-	uint32_t prdt;          /* [31:16] PRDT offset (DWORDs), [15:0] entries */
+-};
+-
+-struct ucd {
+-	uint8_t cmd[512];
+-	uint8_t resp[512];
+-	struct {
+-		uint32_t addr_lo, addr_hi, rsvd, dbc;
+-	} prdt[PRDT_MAX];
+-};
++/*
++ * lavender: SDHCI (SD Host Controller spec 3.0/4.x) registers of the eMMC host, "hc_mem".
++ * Accessed with 32-bit reads and writes only: Transfer Mode and Command go out in one write,
++ * which is what starts the command.
++ */
++#define SDHCI_BLOCK             0x04            /* [11:0] block size, [14:12] SDMA boundary, [31:16] count */
++#define SDHCI_ARGUMENT          0x08
++#define SDHCI_XFER_CMD          0x0c            /* [15:0] transfer mode, [31:16] command */
++#define SDHCI_RESPONSE          0x10
++#define SDHCI_PRESENT           0x24
++#define   PRESENT_CMD_INHIBIT   (1u << 0)
++#define   PRESENT_DAT_INHIBIT   (1u << 1)
++#define   PRESENT_DAT0          (1u << 20)      /* line level: low while the card is busy */
++#define SDHCI_HOST_CTRL1        0x28            /* [7:0] host control 1, [15:8] power, ... */
++#define   HC1_DMA_MASK          (3u << 3)
++#define   HC1_ADMA2_64          (3u << 3)       /* v3: 64-bit ADMA2 */
++#define   HC1_ADMA2             (2u << 3)       /* v4: ADMA2, width from HC2 */
++#define SDHCI_CLOCK_CTRL        0x2c            /* [15:0] clock, [23:16] timeout, [31:24] reset */
++#define   RESET_CMD             (1u << 25)
++#define   RESET_DATA            (1u << 26)
++#define SDHCI_INT_STATUS        0x30            /* [15:0] normal, [31:16] error; write 1 to clear */
++#define   INT_CMD_COMPLETE      (1u << 0)
++#define   INT_XFER_COMPLETE     (1u << 1)
++#define   INT_ERROR             (1u << 15)
++#define SDHCI_INT_ENABLE        0x34
++#define SDHCI_SIGNAL_ENABLE     0x38
++#define SDHCI_HOST_CTRL2        0x3c            /* [15:0] auto CMD error, [31:16] host control 2 */
++#define   HC2_V4                (1u << 28)
++#define   HC2_64BIT             (1u << 29)
++#define SDHCI_CAPS              0x40
++#define   CAPS_ADMA2            (1u << 19)
++#define   CAPS_64BIT_V3         (1u << 28)
++#define SDHCI_ADMA_ERROR        0x54
++#define SDHCI_ADMA_ADDR_LO      0x58
++#define SDHCI_ADMA_ADDR_HI      0x5c
++#define SDHCI_VERSION           0xfc            /* [31:16] host version */
++#define CQ_CFG                  0x08            /* cmdq_mem: bit 0 command queueing on */
++
++/* Command register: index << 8 | flags. Transfer mode bits. */
++#define CMD_RESP_48             2u
++#define CMD_RESP_48_BUSY        3u
++#define CMD_CRC                 (1u << 3)
++#define CMD_INDEX               (1u << 4)
++#define CMD_DATA                (1u << 5)
++#define R1                      (CMD_RESP_48 | CMD_CRC | CMD_INDEX)
++#define R1B                     (CMD_RESP_48_BUSY | CMD_CRC | CMD_INDEX)
++#define XFER_DMA                (1u << 0)
++#define XFER_BLOCK_COUNT        (1u << 1)
++#define XFER_AUTO_CMD12         (1u << 2)
++#define XFER_READ               (1u << 4)
++#define XFER_MULTI              (1u << 5)
++#define R1_ERRORS               0xe4380000u     /* out of range, misalign, block length, WP, ECC, CC, error */
++
++/* ADMA2 descriptor: [15:0] attribute, [31:16] length, then the 64-bit address. */
++#define ADMA_VALID_END_TRAN     0x23u
++
++#define MMC_SECTOR              512u
++#define MMC_MAX_SECTORS         120u            /* per command: one descriptor (16-bit length), 15 x 4 KiB */
++#define UFS_BLOCK               4096u           /* the block size everything above works in */
++#define SECTORS_PER_BLOCK       (UFS_BLOCK / MMC_SECTOR)
++#define BOUNCE_SIZE             (1u << 20)
++#define CMD_TIMEOUT_NS          (5ull * NSEC_PER_SEC)
+ 
+ /* Layout of the contiguous DMA allocation. */
+-#define DMA_UTRL        0x0000                  /* 1 KiB aligned */
+-#define DMA_UCD         0x1000                  /* 128 byte aligned */
+-#define DMA_BOUNCE      0x4000
+-#define DMA_SIZE        (DMA_BOUNCE + BOUNCE_SIZE)
++#define DMA_DESC                0x0000          /* one ADMA2 descriptor */
++#define DMA_BOUNCE              0x4000
++#define DMA_SIZE                (DMA_BOUNCE + BOUNCE_SIZE)
+ 
+ static struct {
+ 	vm_offset_t regs;
+ 	vm_offset_t dma;                        /* kernel VA of the DMA allocation */
+ 	uint64_t dma_pa;
+-	uint8_t lun;
+-	uint8_t tag;
+-	uint64_t first_block, nblocks;          /* partition, in 4 KiB device blocks */
++	uint8_t lun;                            /* always 0: one eMMC user area */
++	uint64_t first_block, nblocks;          /* partition, in 4 KiB blocks */
++	uint64_t sectors;                       /* size of the user area, EXT_CSD SEC_COUNT */
+ 	uint32_t secsize;                       /* logical sector size for the BSD layer */
++	bool cache_on;                          /* the card's write cache is enabled */
+ 	bool writable;                          /* boot-arg ufsrw=1 */
+-	bool cache;                             /* boot-arg ufscache=1 */
+-	bool wait;                              /* boot-arg ufswait=1 */
++	bool cache;                             /* (unused on eMMC) */
++	bool wait;                              /* boot-arg ufswait=1: sleep while a command runs */
+ 	int bmajor, cmajor;
+ 	dev_t bdev;
+ 	bool ready;
+@@ -118,207 +149,222 @@ static LCK_GRP_DECLARE(sweet_ufs_grp, "sweet_ufs");
+ static LCK_MTX_DECLARE(sweet_ufs_lock, &sweet_ufs_grp);
+ 
+ static inline uint32_t
+-ufs_rd(uint32_t off)
++sd_rd(uint32_t off)
+ {
+-	return *(volatile uint32_t *)(su.regs + off);
++	uint32_t v = *(volatile uint32_t *)(su.regs + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
+ }
+ 
+ static inline void
+-ufs_wr(uint32_t off, uint32_t v)
++sd_wr(uint32_t off, uint32_t v)
+ {
+ 	*(volatile uint32_t *)(su.regs + off) = v;
++	__asm__ volatile ("dsb sy" ::: "memory");
+ }
+ 
++/* The host is not cache coherent: clean and invalidate around every transfer. */
+ static void
+ dma_sync(uint32_t off, uint32_t len)
+ {
+ 	flush_dcache64((addr64_t)(su.dma_pa + off), len, TRUE);
+ }
+ 
+-static void
+-dma_clean(uint32_t off, uint32_t len)
+-{
+-	clean_dcache64((addr64_t)(su.dma_pa + off), len, TRUE);
+-}
+-
+-/*
+- * One SCSI command in slot 0, data (if any) to/from the bounce buffer
+- * (to the device when write is set). Returns 0 or an errno.
+- */
++/* Wait until (reg & mask) == want, sleeping between polls when allowed. */
+ static int
+-ufs_scsi(const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
+-{
+-	struct utrd *utrd = (struct utrd *)(su.dma + DMA_UTRL);
+-	struct ucd *ucd = (struct ucd *)(su.dma + DMA_UCD);
+-	uint64_t ucd_pa = su.dma_pa + DMA_UCD, bounce_pa = su.dma_pa + DMA_BOUNCE;
+-
+-	assert(len <= BOUNCE_SIZE);
+-	bzero(utrd, sizeof(*utrd));
+-	bzero(ucd, sizeof(*ucd));
+-
+-	ucd->cmd[0] = 0x01;                     /* COMMAND UPIU */
+-	ucd->cmd[1] = len ? (write ? 0x20 : 0x40) : 0x00;      /* W: data out, R: data in */
+-	ucd->cmd[2] = su.lun;
+-	ucd->cmd[3] = ++su.tag;
+-	ucd->cmd[12] = (uint8_t)(len >> 24);
+-	ucd->cmd[13] = (uint8_t)(len >> 16);
+-	ucd->cmd[14] = (uint8_t)(len >> 8);
+-	ucd->cmd[15] = (uint8_t)len;
+-	memcpy(&ucd->cmd[16], cdb, cdb_len);
+-
+-	/* DD: 1 = memory to device, 2 = device to memory. */
+-	utrd->dw0 = (1u << 28) | ((len ? (write ? 1u : 2u) : 0u) << 25) | (1u << 24);
+-	utrd->dw2 = 0x0f;                       /* OCS invalid until updated */
+-	utrd->ucdba = (uint32_t)ucd_pa;
+-	utrd->ucdbau = (uint32_t)(ucd_pa >> 32);
+-	utrd->resp = (512u / 4) << 16 | (512u / 4);
+-	if (len) {
+-		uint32_t n = 0;
+-		for (uint32_t done = 0; done < len; done += PRDT_CHUNK, n++) {
+-			uint32_t chunk = MIN(PRDT_CHUNK, len - done);
+-			ucd->prdt[n].addr_lo = (uint32_t)(bounce_pa + done);
+-			ucd->prdt[n].addr_hi = (uint32_t)((bounce_pa + done) >> 32);
+-			ucd->prdt[n].dbc = chunk - 1;
+-		}
+-		utrd->prdt = (1024u / 4) << 16 | n;
+-	}
+-
+-	if (su.cache) {
+-		dma_clean(DMA_UTRL, sizeof(*utrd));
+-		dma_clean(DMA_UCD, 16 + cdb_len);
+-		dma_sync(DMA_UCD + offsetof(struct ucd, resp), sizeof(ucd->resp));
+-		if (len) {
+-			dma_clean(DMA_UCD + offsetof(struct ucd, prdt),
+-			    (utrd->prdt & 0xffff) * sizeof(ucd->prdt[0]));
+-		}
+-	} else {
+-		dma_sync(DMA_UTRL, sizeof(*utrd));
+-		dma_sync(DMA_UCD, sizeof(*ucd));
+-	}
+-	if (len) {
+-		if (su.cache && write) {
+-			dma_clean(DMA_BOUNCE, len);
+-		} else {
+-			dma_sync(DMA_BOUNCE, len);
+-		}
+-	}
+-	__builtin_arm_dsb(0xf);
+-
+-	ufs_wr(REG_UTRLDBR, 1);
+-	uint64_t deadline;
++sd_wait(uint32_t reg, uint32_t mask, uint32_t want, uint32_t *last)
++{
++	uint64_t deadline, now;
+ 	nanoseconds_to_absolutetime(CMD_TIMEOUT_NS, &deadline);
+ 	deadline += mach_absolute_time();
+ 	bool sleepable = su.wait && su.ready && ml_get_interrupts_enabled() &&
+ 	    !ml_at_interrupt_context() && get_preemption_level() == 0;
+-	uint64_t spin_until = 0, sleep_interval = 0;
+-	if (sleepable) {
+-		nanoseconds_to_absolutetime(CMD_SPIN_NS, &spin_until);
+-		spin_until += mach_absolute_time();
+-		nanoseconds_to_absolutetime(CMD_SLEEP_NS, &sleep_interval);
+-	}
+-	while (ufs_rd(REG_UTRLDBR) & 1) {
+-		uint64_t now = mach_absolute_time();
++	for (;;) {
++		uint32_t v = sd_rd(reg);
++		if (last) {
++			*last = v;
++		}
++		if ((v & mask) == want) {
++			return 0;
++		}
++		if (reg == SDHCI_INT_STATUS && (v & INT_ERROR)) {
++			return EIO;
++		}
++		now = mach_absolute_time();
+ 		if (now > deadline) {
+-			ufs_wr(REG_UTRLCLR, ~1u);
+-			printf("SWEET UFS: command 0x%02x timed out\n", cdb[0]);
+ 			return ETIMEDOUT;
+ 		}
+-		if (sleepable && now >= spin_until) {
+-			uint64_t wake = now + MIN(sleep_interval, deadline - now);
+-			/* Keep the mutex: slot 0 and the bounce buffer are still owned. */
+-			if (assert_wait_deadline_with_leeway((event_t)&su.wait, THREAD_UNINT,
+-			    TIMEOUT_URGENCY_SYS_CRITICAL, wake, 0) == THREAD_WAITING) {
++		if (sleepable) {
++			uint64_t wake;
++			nanoseconds_to_absolutetime(100 * NSEC_PER_USEC, &wake);
++			if (assert_wait_deadline((event_t)&su.wait, THREAD_UNINT, now + wake) == THREAD_WAITING) {
+ 				thread_block(THREAD_CONTINUE_NULL);
+ 			}
+ 		} else {
+ 			delay(1);
+ 		}
+ 	}
+-	__builtin_arm_dsb(0xf);
+-	ufs_wr(REG_IS, ufs_rd(REG_IS));         /* acknowledge completion status */
++}
+ 
+-	dma_sync(DMA_UTRL, sizeof(*utrd));
+-	if (su.cache) {
+-		dma_sync(DMA_UCD + offsetof(struct ucd, resp), sizeof(ucd->resp));
+-	} else {
+-		dma_sync(DMA_UCD, sizeof(*ucd));
++static void
++sd_reset_lines(void)
++{
++	sd_wr(SDHCI_CLOCK_CTRL, sd_rd(SDHCI_CLOCK_CTRL) | RESET_CMD | RESET_DATA);
++	(void)sd_wait(SDHCI_CLOCK_CTRL, RESET_CMD | RESET_DATA, 0, NULL);
++}
++
++/*
++ * One command; with nsect != 0 a data transfer through one ADMA2 descriptor pointing at the
++ * bounce buffer (offset buf). Returns 0 or an errno; *resp gets response bits 39:8 (the R1 status).
++ */
++static int
++mmc_cmd(uint32_t index, uint32_t arg, uint32_t flags, uint32_t xfer, uint32_t nsect, uint32_t buf,
++    uint32_t *resp)
++{
++	uint32_t st = 0, r = 0;
++	bool busy = (flags & 3) == CMD_RESP_48_BUSY;
++	int error = sd_wait(SDHCI_PRESENT,
++	    PRESENT_CMD_INHIBIT | ((nsect || busy) ? PRESENT_DAT_INHIBIT : 0), 0, &st);
++	if (error) {
++		printf("SWEET EMMC: CMD%u: host busy (present 0x%08x)\n", index, st);
++		sd_reset_lines();
++		return error;
+ 	}
+-	if (len && !(su.cache && write)) {
+-		dma_sync(DMA_BOUNCE, len);
++	sd_wr(SDHCI_INT_STATUS, 0xffffffff);
++	if (nsect) {
++		volatile uint32_t *d = (volatile uint32_t *)(su.dma + DMA_DESC);
++		uint64_t pa = su.dma_pa + DMA_BOUNCE + buf;
++		d[0] = ADMA_VALID_END_TRAN | (nsect * MMC_SECTOR) << 16;
++		d[1] = (uint32_t)pa;
++		d[2] = (uint32_t)(pa >> 32);
++		d[3] = 0;
++		dma_sync(DMA_DESC, 16);
++		dma_sync(DMA_BOUNCE + buf, nsect * MMC_SECTOR);
++		sd_wr(SDHCI_ADMA_ADDR_LO, (uint32_t)(su.dma_pa + DMA_DESC));
++		sd_wr(SDHCI_ADMA_ADDR_HI, (uint32_t)((su.dma_pa + DMA_DESC) >> 32));
++		sd_wr(SDHCI_BLOCK, (7u << 12) | MMC_SECTOR | (nsect << 16));
++		flags |= CMD_DATA;
+ 	}
++	sd_wr(SDHCI_ARGUMENT, arg);
++	sd_wr(SDHCI_XFER_CMD, xfer | ((index << 8 | flags) << 16));
+ 
+-	uint32_t ocs = utrd->dw2 & 0xff;
+-	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
+-		printf("SWEET UFS: command 0x%02x failed: ocs 0x%x upiu 0x%x response 0x%x status 0x%x\n",
+-		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
+-		return EIO;
++	error = sd_wait(SDHCI_INT_STATUS, INT_CMD_COMPLETE, INT_CMD_COMPLETE, &st);
++	if (!error) {
++		r = sd_rd(SDHCI_RESPONSE);
++		sd_wr(SDHCI_INT_STATUS, INT_CMD_COMPLETE);
++		if (nsect || busy) {
++			error = sd_wait(SDHCI_INT_STATUS, INT_XFER_COMPLETE, INT_XFER_COMPLETE, &st);
++		}
++	}
++	if (!error && (r & R1_ERRORS)) {
++		error = EIO;
++	}
++	if (nsect) {
++		dma_sync(DMA_BOUNCE + buf, nsect * MMC_SECTOR);
++	}
++	if (error) {
++		printf("SWEET EMMC: CMD%u arg 0x%x failed (%d): status 0x%08x R1 0x%08x ADMA err 0x%x\n",
++		    index, arg, error, st, r, sd_rd(SDHCI_ADMA_ERROR) & 0xff);
++		sd_wr(SDHCI_INT_STATUS, 0xffffffff);
++		sd_reset_lines();
++		return error;
++	}
++	sd_wr(SDHCI_INT_STATUS, 0xffffffff);
++	if (resp) {
++		*resp = r;
+ 	}
+ 	return 0;
+ }
+ 
+-/* READ(10) of count device blocks at lba into the bounce buffer. */
++/* Read or write nsect 512-byte sectors at sector, from/to the bounce buffer. */
++static int
++mmc_rw(bool write, uint64_t sector, uint32_t nsect)
++{
++	if (nsect == 0 || nsect * MMC_SECTOR > BOUNCE_SIZE || sector + nsect > su.sectors) {
++		return EINVAL;
++	}
++	for (uint32_t done = 0; done < nsect;) {
++		uint32_t n = MIN(nsect - done, MMC_MAX_SECTORS);
++		uint32_t xfer = XFER_DMA | XFER_BLOCK_COUNT | (write ? 0 : XFER_READ) |
++		    (n > 1 ? XFER_MULTI | XFER_AUTO_CMD12 : 0);
++		uint32_t index = write ? (n > 1 ? 25 : 24) : (n > 1 ? 18 : 17);
++		int error = mmc_cmd(index, (uint32_t)(sector + done), R1, xfer, n, done * MMC_SECTOR, NULL);
++		if (!error && write) {
++			/* Programming continues after the transfer: wait for DAT0 to go high again. */
++			error = sd_wait(SDHCI_PRESENT, PRESENT_DAT0, PRESENT_DAT0, NULL);
++		}
++		if (error) {
++			return error;
++		}
++		done += n;
++	}
++	return 0;
++}
++
++/* Read count 4 KiB blocks at lba (in 4 KiB units from the start of the user area). */
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+ {
+-	if (lba > UINT32_MAX || count > BOUNCE_SIZE / UFS_BLOCK) {
++	if (count == 0 || count > BOUNCE_SIZE / UFS_BLOCK) {
+ 		return EINVAL;
+ 	}
+-	uint8_t cdb[10] = {
+-		0x28, 0,
+-		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
+-		0, (uint8_t)(count >> 8), (uint8_t)count, 0
+-	};
+-	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK, false);
++	return mmc_rw(false, lba * SECTORS_PER_BLOCK, count * SECTORS_PER_BLOCK);
+ }
+ 
+ /*
+- * topaz: on 2026-10-19 the LUN0 GPT (super, userdata, esp, win, ...) was found
+- * destroyed after iOS sessions. Remember both GPT copies and fence them off;
+- * a watchdog thread re-reads them and panics the moment they change.
++ * Both GPT copies are fenced off: no write may touch them (sectors), and a watchdog thread
++ * re-reads them and panics the moment they change.
+  */
+-static uint64_t gpt_alt;                /* backup header LBA (last LBA of LUN0) */
++static uint64_t gpt_alt;                /* backup header sector (last sector of the user area) */
+ static uint32_t gpt_hcrc, gpt_ecrc, gpt_bhcrc;
+ static int gpt_chan;
+ 
+ /*
+- * WRITE(10) of count device blocks from the bounce buffer to lba. The range
+- * must lie inside the partition: this is the only place data goes out.
++ * Write count 4 KiB blocks from the bounce buffer to lba. The range must lie inside the
++ * partition: this is the only place data goes out.
+  */
+ static int
+ ufs_write_blocks(uint64_t lba, uint32_t count)
+ {
++	uint64_t first = lba * SECTORS_PER_BLOCK, last = first + (uint64_t)count * SECTORS_PER_BLOCK - 1;
+ 	if (!su.writable || !su.nblocks || count == 0 || count > BOUNCE_SIZE / UFS_BLOCK ||
+ 	    lba < su.first_block || lba - su.first_block >= su.nblocks ||
+-	    count > su.nblocks - (lba - su.first_block) || lba + count - 1 > UINT32_MAX ||
+-	    lba < 6 || (gpt_alt && lba + count - 1 >= gpt_alt - 4)) {
+-		printf("SWEET UFS: refusing write of %u blocks at 0x%llx\n", count, lba);
++	    count > su.nblocks - (lba - su.first_block) ||
++	    first < 34 || !gpt_alt || last >= gpt_alt - 33) {
++		printf("SWEET EMMC: refusing write of %u blocks at 0x%llx\n", count, lba);
+ 		return EPERM;
+ 	}
+-	uint8_t cdb[10] = {
+-		0x2a, 0,
+-		(uint8_t)(lba >> 24), (uint8_t)(lba >> 16), (uint8_t)(lba >> 8), (uint8_t)lba,
+-		0, (uint8_t)(count >> 8), (uint8_t)count, 0
+-	};
+-	return ufs_scsi(cdb, sizeof(cdb), count * UFS_BLOCK, true);
++	return mmc_rw(true, first, count * SECTORS_PER_BLOCK);
+ }
+ 
++/* Make written data durable: flush the card's write cache, if it has one enabled. */
+ static int
+ ufs_sync_cache(void)
+ {
+-	static const uint8_t cdb[10] = { 0x35 };       /* SYNCHRONIZE CACHE(10), whole LUN */
+-	return ufs_scsi(cdb, sizeof(cdb), 0, false);
++	if (!su.cache_on) {
++		return 0;
++	}
++	/* CMD6 SWITCH, write byte: EXT_CSD[32] FLUSH_CACHE = 1 */
++	return mmc_cmd(6, (3u << 24) | (32u << 16) | (1u << 8), R1B, 0, 0, 0, NULL);
++}
++
++/* One raw 512-byte sector into the start of the bounce buffer (GPT). */
++static int
++mmc_read_sector(uint64_t sector, uint32_t count)
++{
++	return mmc_rw(false, sector, count);
+ }
+ 
+ static int
+ ufs_find_partition(const char *want)
+ {
+ 	const uint8_t *b = (const uint8_t *)(su.dma + DMA_BOUNCE);
+-	int error = ufs_read_blocks(1, 1);
++	int error = mmc_read_sector(1, 1);
+ 	if (error) {
+ 		return error;
+ 	}
+ 	if (memcmp(b, "EFI PART", 8) != 0) {
+-		printf("SWEET UFS: LUN %u has no GPT\n", su.lun);
++		printf("SWEET EMMC: no GPT\n");
+ 		return ENXIO;
+ 	}
+ 	uint64_t entry_lba;
+@@ -329,11 +375,11 @@ ufs_find_partition(const char *want)
+ 	memcpy(&entry_lba, b + 72, 8);
+ 	memcpy(&nent, b + 80, 4);
+ 	memcpy(&esz, b + 84, 4);
+-	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE) {
+-		printf("SWEET UFS: unsupported GPT entries %u x %u\n", nent, esz);
++	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE || gpt_alt >= su.sectors) {
++		printf("SWEET EMMC: unsupported GPT: %u entries x %u, backup at 0x%llx\n", nent, esz, gpt_alt);
+ 		return ENXIO;
+ 	}
+-	error = ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK);
++	error = mmc_read_sector(entry_lba, (nent * esz + MMC_SECTOR - 1) / MMC_SECTOR);
+ 	if (error) {
+ 		return error;
+ 	}
+@@ -355,19 +401,20 @@ ufs_find_partition(const char *want)
+ 		uint64_t first, last;
+ 		memcpy(&first, e + 32, 8);
+ 		memcpy(&last, e + 40, 8);
+-		if (last < first) {
++		if (last < first || (first % SECTORS_PER_BLOCK) || last >= gpt_alt) {
++			printf("SWEET EMMC: partition %s at sectors 0x%llx-0x%llx: unusable\n", want, first, last);
+ 			return ENXIO;
+ 		}
+-		su.first_block = first;
+-		su.nblocks = last - first + 1;
+-		if (ufs_read_blocks(gpt_alt, 1) == 0 && memcmp(b, "EFI PART", 8) == 0) {
++		su.first_block = first / SECTORS_PER_BLOCK;
++		su.nblocks = (last - first + 1) / SECTORS_PER_BLOCK;
++		if (mmc_read_sector(gpt_alt, 1) == 0 && memcmp(b, "EFI PART", 8) == 0) {
+ 			memcpy(&gpt_bhcrc, b + 16, 4);
+ 		}
+-		printf("SWEET UFS: GPT LUN0 hcrc %#x ecrc %#x backup@%#llx hcrc %#x\n",
++		printf("SWEET EMMC: GPT hcrc %#x ecrc %#x, backup at sector %#llx hcrc %#x\n",
+ 		    gpt_hcrc, gpt_ecrc, gpt_alt, gpt_bhcrc);
+ 		return 0;
+ 	}
+-	printf("SWEET UFS: no GPT partition named \"%s\"\n", want);
++	printf("SWEET EMMC: no GPT partition named \"%s\"\n", want);
+ 	return ENOENT;
+ }
+ 
+@@ -392,48 +439,45 @@ ufs_lookup_part(const char *want, unsigned *slot)
+ 	if (part_cached == sizeof(part_cache) / sizeof(part_cache[0]) || strlen(want) > 36) {
+ 		return ENOSPC;
+ 	}
+-	for (uint8_t lun = 0; lun < 6; lun++) {
+-		su.lun = lun;
+-		if (ufs_read_blocks(1, 1) != 0 || memcmp(b, "EFI PART", 8) != 0) {
+-			continue;
++	if (mmc_read_sector(1, 1) != 0 || memcmp(b, "EFI PART", 8) != 0) {
++		return ENOENT;
++	}
++	uint64_t entry_lba;
++	uint32_t nent, esz;
++	memcpy(&entry_lba, b + 72, 8);
++	memcpy(&nent, b + 80, 4);
++	memcpy(&esz, b + 84, 4);
++	if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE ||
++	    mmc_read_sector(entry_lba, (nent * esz + MMC_SECTOR - 1) / MMC_SECTOR) != 0) {
++		return ENOENT;
++	}
++	for (uint32_t i = 0; i < nent; i++) {
++		const uint8_t *e = b + i * esz;
++		char name[37];
++		unsigned c;
++		for (c = 0; c < 36; c++) {
++			uint16_t ch = (uint16_t)(e[56 + 2 * c] | e[57 + 2 * c] << 8);
++			if (ch == 0 || ch > 0x7f) {
++				break;
++			}
++			name[c] = (char)ch;
+ 		}
+-		uint64_t entry_lba;
+-		uint32_t nent, esz;
+-		memcpy(&entry_lba, b + 72, 8);
+-		memcpy(&nent, b + 80, 4);
+-		memcpy(&esz, b + 84, 4);
+-		if (esz != 128 || nent == 0 || nent * esz > BOUNCE_SIZE ||
+-		    ufs_read_blocks(entry_lba, (nent * esz + UFS_BLOCK - 1) / UFS_BLOCK) != 0) {
++		name[c] = 0;
++		uint64_t first, last;
++		memcpy(&first, e + 32, 8);
++		memcpy(&last, e + 40, 8);
++		if (strcmp(name, want) != 0 || last < first || (first % SECTORS_PER_BLOCK)) {
+ 			continue;
+ 		}
+-		for (uint32_t i = 0; i < nent; i++) {
+-			const uint8_t *e = b + i * esz;
+-			char name[37];
+-			unsigned c;
+-			for (c = 0; c < 36; c++) {
+-				uint16_t ch = (uint16_t)(e[56 + 2 * c] | e[57 + 2 * c] << 8);
+-				if (ch == 0 || ch > 0x7f) {
+-					break;
+-				}
+-				name[c] = (char)ch;
+-			}
+-			name[c] = 0;
+-			uint64_t first, last;
+-			memcpy(&first, e + 32, 8);
+-			memcpy(&last, e + 40, 8);
+-			if (strcmp(name, want) != 0 || last < first) {
+-				continue;
+-			}
+-			unsigned k = part_cached++;
+-			strlcpy(part_cache[k].name, want, sizeof(part_cache[k].name));
+-			part_cache[k].lun = lun;
+-			part_cache[k].first = first;
+-			part_cache[k].nblocks = last - first + 1;
+-			printf("SWEET UFS: partition %s: LUN %u blocks 0x%llx+0x%llx (read-only)\n",
+-			    want, lun, first, last - first + 1);
+-			*slot = k;
+-			return 0;
+-		}
++		unsigned k = part_cached++;
++		strlcpy(part_cache[k].name, want, sizeof(part_cache[k].name));
++		part_cache[k].lun = 0;
++		part_cache[k].first = first / SECTORS_PER_BLOCK;
++		part_cache[k].nblocks = (last - first + 1) / SECTORS_PER_BLOCK;
++		printf("SWEET EMMC: partition %s: blocks 0x%llx+0x%llx (read-only)\n",
++		    want, part_cache[k].first, part_cache[k].nblocks);
++		*slot = k;
++		return 0;
+ 	}
+ 	return ENOENT;
+ }
+@@ -472,40 +516,79 @@ sweet_ufs_read_part(const char *want, uint64_t off, void *dst, uint64_t len)
+ 	return error;
+ }
+ 
++/*
++ * Take the host as ABL left it: bus width, clock and card mode stay; polled operation,
++ * 64-bit ADMA2, maximum data timeout. Command queueing (CQE) must be off.
++ */
+ static int
+-ufs_take_over_host(void)
++mmc_take_over_host(vm_offset_t cq)
+ {
+-	uint32_t hce = ufs_rd(REG_HCE), hcs = ufs_rd(REG_HCS);
+-	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY)) {
+-		printf("SWEET UFS: host not ready (hce 0x%x hcs 0x%x)\n", hce, hcs);
++	uint32_t ver = sd_rd(SDHCI_VERSION) >> 16, caps = sd_rd(SDHCI_CAPS);
++	uint32_t hc1 = sd_rd(SDHCI_HOST_CTRL1), hc2 = sd_rd(SDHCI_HOST_CTRL2), present = sd_rd(SDHCI_PRESENT);
++	uint32_t cqcfg = cq ? *(volatile uint32_t *)(cq + CQ_CFG) : 0;
++
++	printf("SWEET EMMC: host version 0x%x caps 0x%08x hc1 0x%08x hc2 0x%08x present 0x%08x cqcfg 0x%x\n",
++	    ver, caps, hc1, hc2, present, cqcfg);
++	if (cqcfg & 1) {
++		printf("SWEET EMMC: command queueing is on: not supported\n");
+ 		return ENXIO;
+ 	}
+-	if (ufs_rd(REG_UTRLDBR)) {
+-		printf("SWEET UFS: requests outstanding from the bootloader\n");
+-		return EBUSY;
+-	}
+-	/* With RAM above 4 GiB (mkadt.py --highmem) the DMA memory can be there too. */
+-	if (((su.dma_pa + DMA_SIZE - 1) >> 32) && !(ufs_rd(REG_CAP) & CAP_64AS)) {
+-		printf("SWEET UFS: DMA memory at 0x%llx but the host has no 64-bit addressing\n",
+-		    su.dma_pa);
++	if (!(caps & CAPS_ADMA2)) {
++		printf("SWEET EMMC: host reports no ADMA2\n");
+ 		return ENXIO;
+ 	}
+-	ufs_wr(REG_IE, 0);                      /* polled operation */
+-	ufs_wr(REG_IS, ufs_rd(REG_IS));
+-	ufs_wr(REG_UTRLRSR, 0);
+-	uint64_t list = su.dma_pa + DMA_UTRL;
+-	ufs_wr(REG_UTRLBA, (uint32_t)list);
+-	ufs_wr(REG_UTRLBAU, (uint32_t)(list >> 32));
+-	ufs_wr(REG_UTRLRSR, 1);
+-	/* Never ring a doorbell unless the host uses our list. */
+-	if (ufs_rd(REG_UTRLBA) != (uint32_t)list || ufs_rd(REG_UTRLBAU) != (uint32_t)(list >> 32) ||
+-	    !(ufs_rd(REG_UTRLRSR) & 1)) {
+-		printf("SWEET UFS: host did not take our request list\n");
+-		return EIO;
++	sd_wr(SDHCI_SIGNAL_ENABLE, 0);                  /* polled: nothing to the interrupt controller */
++	sd_wr(SDHCI_INT_ENABLE, 0x03ff000b);            /* status for: command/transfer complete, DMA, every error */
++	sd_wr(SDHCI_INT_STATUS, 0xffffffff);
++	sd_wr(SDHCI_CLOCK_CTRL, (sd_rd(SDHCI_CLOCK_CTRL) & 0x0000ffffu) | (0x0eu << 16));
++	if (hc2 & HC2_V4) {
++		sd_wr(SDHCI_HOST_CTRL2, hc2 | HC2_64BIT);
++		hc1 = (hc1 & ~HC1_DMA_MASK) | HC1_ADMA2;
++	} else {
++		hc1 = (hc1 & ~HC1_DMA_MASK) | HC1_ADMA2_64;
+ 	}
++	sd_wr(SDHCI_HOST_CTRL1, hc1);
++	sd_reset_lines();
+ 	return 0;
+ }
+ 
++/* Card state: EXT_CSD (size, cache, selected partition); back to the user area if needed. */
++static int
++mmc_card_init(void)
++{
++	const uint8_t *ext = (const uint8_t *)(su.dma + DMA_BOUNCE);
++	uint32_t r = 0;
++	const uint32_t xfer = XFER_DMA | XFER_BLOCK_COUNT | XFER_READ;
++
++	int error = mmc_cmd(8, 0, R1, xfer, 1, 0, NULL);        /* SEND_EXT_CSD */
++	for (uint32_t rca = 1; error && rca <= 4; rca++) {
++		/* Not in the transfer state: find the card's relative address and select it. */
++		if (mmc_cmd(13, rca << 16, R1, 0, 0, 0, &r) == 0) {
++			printf("SWEET EMMC: card at RCA %u in state %u: selecting it\n", rca, (r >> 9) & 0xf);
++			(void)mmc_cmd(7, rca << 16, R1B, 0, 0, 0, NULL);
++			error = mmc_cmd(8, 0, R1, xfer, 1, 0, NULL);
++		}
++	}
++	if (error) {
++		return error;
++	}
++	su.sectors = (uint64_t)ext[212] | (uint64_t)ext[213] << 8 | (uint64_t)ext[214] << 16 | (uint64_t)ext[215] << 24;
++	su.cache_on = (ext[33] & 1) != 0;
++	uint8_t part = ext[179];
++	printf("SWEET EMMC: %llu MiB, EXT_CSD rev %u, partition config 0x%02x, cache %s (%u KiB), "
++	    "bus width %u, timing %u\n", su.sectors >> 11, ext[192], part, su.cache_on ? "on" : "off",
++	    (uint32_t)ext[249] | (uint32_t)ext[250] << 8 | (uint32_t)ext[251] << 16 | (uint32_t)ext[252] << 24,
++	    ext[183], ext[185]);
++	if (part & 7) {
++		/* A boot partition is selected for access: back to the user area. */
++		error = mmc_cmd(6, (3u << 24) | (179u << 16) | ((uint32_t)(part & ~7u) << 8), R1B, 0, 0, 0, NULL);
++		if (error) {
++			return error;
++		}
++	}
++	return su.sectors ? 0 : ENXIO;
++}
++
+ static int
+ sweet_ufs_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
+ {
+@@ -716,12 +799,12 @@ sweet_gpt_watch(__unused void *arg, __unused wait_result_t wr)
+ 		uint32_t h = 0, e = 0, bh = 0;
+ 		bool ok;
+ 		lck_mtx_lock(&sweet_ufs_lock);
+-		ok = ufs_read_blocks(1, 1) == 0 && memcmp(b, "EFI PART", 8) == 0;
++		ok = mmc_read_sector(1, 1) == 0 && memcmp(b, "EFI PART", 8) == 0;
+ 		if (ok) {
+ 			memcpy(&h, b + 16, 4);
+ 			memcpy(&e, b + 88, 4);
+ 		}
+-		if (ok && gpt_bhcrc && ufs_read_blocks(gpt_alt, 1) == 0) {
++		if (ok && gpt_bhcrc && mmc_read_sector(gpt_alt, 1) == 0) {
+ 			if (memcmp(b, "EFI PART", 8) == 0) {
+ 				memcpy(&bh, b + 16, 4);
+ 			}
+@@ -730,7 +813,7 @@ sweet_gpt_watch(__unused void *arg, __unused wait_result_t wr)
+ 		if (!ok || h != gpt_hcrc || e != gpt_ecrc || (gpt_bhcrc && bh != gpt_bhcrc)) {
+ 			uint64_t ns;
+ 			absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+-			panic("SWEET UFS: GPT LUN0 CHANGED after %llu s: primary %s hcrc %#x/%#x ecrc %#x/%#x backup hcrc %#x/%#x",
++			panic("SWEET EMMC: GPT CHANGED after %llu s: primary %s hcrc %#x/%#x ecrc %#x/%#x backup hcrc %#x/%#x",
+ 			    ns / NSEC_PER_SEC, ok ? "present" : "MISSING", h, gpt_hcrc, e, gpt_ecrc, bh, gpt_bhcrc);
+ 		}
+ 	}
+@@ -761,6 +844,7 @@ sweet_ufs_init(void)
+ 	su.wait = (wait == 1);
+ 
+ 	su.regs = ml_io_map(reg[0], reg[1]);
++	vm_offset_t cq = size >= 4 * sizeof(uintptr_t) ? ml_io_map(reg[2], reg[3]) : 0;
+ 	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		printf("SWEET UFS: no contiguous DMA memory\n");
+@@ -775,12 +859,9 @@ sweet_ufs_init(void)
+ 	su.secsize = DEV_BSIZE;
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+-	error = ufs_take_over_host();
++	error = mmc_take_over_host(cq);
+ 	if (!error) {
+-		static const uint8_t tur[6] = { 0x00 };
+-		/* The first command after the bootloader may report a unit attention. */
+-		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
+-		}
++		error = mmc_card_init();
+ 	}
+ 	if (!error) {
+ 		error = ufs_find_partition(want);
+@@ -819,15 +900,9 @@ sweet_ufs_init(void)
+ 	 * topaz; sweettouch=0 / sweetkeys=0 disable them. USB still pokes SM7150
+ 	 * MMIO (DWC3 at 0xa600000), so it only runs with sweethw=1.
+ 	 */
+-	int hw = 0;
+-	(void)PE_parse_boot_argn("sweethw", &hw, sizeof(hw));
+ 	sweet_touch_init();
+ 	sweet_keys_init();
+-	if (hw == 1) {
+-		sweet_usb_probe();
+-	} else {
+-		printf("SWEET UFS: USB skipped (topaz, sweethw=0)\n");
+-	}
++	sweet_usb_probe();      /* lavender: started earlier by the platform expert; no-op here */
+ 	return 0;
+ }
+ 
