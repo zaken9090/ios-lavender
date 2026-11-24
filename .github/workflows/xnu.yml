@@ -1,0 +1,134 @@
+name: xnu
+
+# Builds Apple's open-source XNU (xnu-8796, the iOS 16 kernel) for lavender.
+# Patch stack, applied in file-name order:
+#   1. blacktop/darwin-xnu-build's own patches
+#   2. the MakrSas/ios-topaz series (0001...), fetched at a pinned commit, not copied into this repo
+#   3. xnu/patches/ of this repo (1000-lavender-...)
+# Started by hand only: gh workflow run xnu.yml [-f runner=macos-15-intel]
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "macos-15 (Apple silicon, faster) or macos-15-intel (fallback)"
+        default: macos-15
+      kernel_config:
+        description: RELEASE / DEVELOPMENT / DEBUG
+        default: DEVELOPMENT
+      keep_going:
+        description: "make -k: report every compile error in one run"
+        default: "true"
+
+concurrency:
+  group: xnu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
+  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  BASE_REPO: https://github.com/MakrSas/ios-topaz
+  BASE_SHA: e4772911e116ab4ab6c4ac1f38e6106fefe8b483
+  MACOS_VERSION: "13.5"                 # the macOS release that carries xnu-8796
+  KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+  MACHINE_CONFIG: SWEET                 # machine configuration added by the base series
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,file_macro,pch_defines
+  CCACHE_MAXSIZE: 3G
+  CCACHE_WRAP: ${{ github.workspace }}/ccache-bin
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner || 'macos-15' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch build script and base patch series
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+          git init -q base
+          git -C base fetch -q --depth 1 "$BASE_REPO" "$BASE_SHA"
+          git -C base checkout -q FETCH_HEAD
+          cp base/xnu/patches/*.patch base/xnu/patches/*.sh dxb/patches/
+          ls xnu/patches/*.patch >/dev/null 2>&1 && cp xnu/patches/*.patch dxb/patches/
+          # The kernel is plain arm64 for ARMv8.0 cores (Kryo 260: no LSE atomics), and so must be
+          # libfirehose_kernel, which the build script would build for arm64e only.
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="arm64" VALID_ARCHS="arm64" OTHER_CFLAGS="-mkernel -nostdinc -Wno-packed -mcpu=cortex-a53"/' dxb/build.sh
+          grep -c 'OTHER_CFLAGS="-mkernel -nostdinc -Wno-packed -mcpu=cortex-a53"' dxb/build.sh
+          # Compile through ccache wrappers (xcodebuild needs a single executable per tool).
+          sed -i '' 's|export CC="$(xcrun -find clang)"|export CC="$CCACHE_WRAP/clang"|; s|export CXX="$(xcrun -find clang++)"|export CXX="$CCACHE_WRAP/clang++"|' dxb/build.sh
+          grep -c 'export CC="$CCACHE_WRAP/clang"' dxb/build.sh
+          ls dxb/patches | tail -15
+
+      - name: Tools
+        run: |
+          brew install jq gum bash cmake ninja ccache
+          # The build script only checks that `xcodes` exists; Xcode is preinstalled.
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+          # Oldest installed Xcode: closest to what xnu-8796 was written for.
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          sw_vers; xcodebuild -version
+          mkdir -p "$CCACHE_WRAP"
+          for t in clang clang++; do
+            # Assembly includes the generated assym.s, which ccache does not hash: never cache .s
+            printf '#!/bin/sh\nfor a; do case "$a" in *.s) exec %s "$@";; esac; done\nexec ccache %s "$@"\n' "$(xcrun -find $t)" "$(xcrun -find $t)" > "$CCACHE_WRAP/$t"
+            chmod +x "$CCACHE_WRAP/$t"
+          done
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ runner.arch }}-${{ env.KERNEL_CONFIG }}-${{ env.BASE_SHA }}-${{ hashFiles('xnu/patches/**', '.github/workflows/xnu.yml') }}
+          restore-keys: |
+            ccache-${{ runner.arch }}-${{ env.KERNEL_CONFIG }}-${{ env.BASE_SHA }}-
+            ccache-${{ runner.arch }}-${{ env.KERNEL_CONFIG }}-
+
+      - name: Build
+        working-directory: dxb
+        env:
+          MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
+        run: |
+          ccache -z
+          bash build.sh
+          ccache -s
+
+      - name: Package patched source and generated headers
+        if: always()
+        run: |
+          # Enough to write the next patch against, and to re-run single compiles locally.
+          tar czf buildtree.tgz \
+            --exclude='*.o' --exclude='*.cpo' --exclude='*.a' --exclude='*.dSYM' --exclude='*.unstripped' \
+            --exclude='kernel.development.*' --exclude='kernel.release.*' --exclude='.git' \
+            -C dxb build/xnu.obj fakeroot/usr/local/include xnu
+          ls -la buildtree.tgz
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-buildtree
+          path: buildtree.tgz
+          retention-days: 7
+
+      - name: Collect kernel
+        if: always()
+        run: |
+          mkdir -p out
+          cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          ls -la out
+          (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xnu-kernel
+          path: out/
+          if-no-files-found: error
