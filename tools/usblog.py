@@ -9,7 +9,7 @@ usage: usblog.py [--out FILE] [--wait SECONDS] [--idle SECONDS] [--until TEXT] [
   --wait N       how long to wait for the device to appear (default 60)
   --idle N       stop after N seconds without new log bytes (default: run until Ctrl+C)
   --until TEXT   stop when TEXT appears in the log
-  --cmd TEXT     send a command (lv:ping, lv:reset) once connected; with --idle 0 exit right after
+  --cmd TEXT     send a command (lv:ping, lv:reset, lv:fastboot) once connected; with --idle 0 exit right after
 """
 import argparse
 import ctypes

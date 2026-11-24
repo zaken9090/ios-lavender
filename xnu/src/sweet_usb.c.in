@@ -4,7 +4,8 @@
  * Replaces the base series' CDC-ECM function with one vendor interface that Windows binds to
  * WinUSB by itself (Microsoft OS 2.0 descriptors), so the PC needs no driver:
  *   bulk IN  0x81  the console log ring, from the first boot message on
- *   bulk OUT 0x01  one text command per packet: "lv:ping", "lv:reset"
+ *   bulk OUT 0x01  one text command per packet: "lv:ping", "lv:reset" (boots the installed
+ *                  system), "lv:fastboot" (reboots into the bootloader)
  * The PC side is tools/usblog.py.
  *
  * The controller is the Synopsys DWC3 at 0x0a800000 that ABL has just used for fastboot: it is
@@ -365,6 +366,126 @@ ud_setup(void)
 	}
 }
 
+/*
+ * "Reboot to bootloader" the way Linux does it on this phone (msm-poweroff.c, qpnp-power-on.c):
+ * restart reason BOOTLOADER in the PM660's PON block, PS_HOLD reset type WARM, then PS_HOLD low.
+ * ABL reads the reason and stays in fastboot. (PSCI SYSTEM_RESET is a cold reset: the reason is lost.)
+ *
+ * The PMIC is reached through the SPMI arbiter (DT qcom,spmi@800f000, arbiter v3): a table maps
+ * each peripheral (slave id, address high byte) to a channel; writes go through the channel's
+ * registers at chnls + 0x8000 * channel, reads through the observer block.
+ */
+#define SPMI_CORE_PA    0x0800f000u     /* +0x800: channel -> peripheral table, bits 19:8 */
+#define SPMI_CNFG_PA    0x0800a000u     /* +0x700: channel owner, bits 2:0 (0 = the application CPU) */
+#define SPMI_CHNLS_PA   0x08400000u
+#define SPMI_OBSRVR_PA  0x09400000u
+#define SPMI_CMD        0x00            /* opcode << 27 | register << 4; 0 = write, 1 = read (one byte) */
+#define SPMI_STATUS     0x08            /* bit 0 done, bits 3:1 failure / denied / dropped */
+#define SPMI_WDATA      0x10
+#define SPMI_RDATA      0x18
+#define PON_SOFT_RB_SPARE       0x88f   /* restart reason in bits 7:1 */
+#define PON_PS_HOLD_RST_CTL     0x85a   /* reset type in bits 3:0, 1 = warm */
+#define PON_PS_HOLD_RST_CTL2    0x85b   /* bit 7: reset enabled */
+#define PON_REASON_BOOTLOADER   2
+#define PS_HOLD_PA      0x010ac000u     /* DT restart@10ac000 */
+
+static int
+spmi_channel(unsigned peripheral)
+{
+	static vm_offset_t core, cnfg;
+	int found = -1;
+
+	if (core == 0) {
+		core = ml_io_map(SPMI_CORE_PA, 0x1000);
+		cnfg = ml_io_map(SPMI_CNFG_PA, 0x1000);
+	}
+	if (core == 0 || cnfg == 0) {
+		return -1;
+	}
+	for (unsigned i = 0; i < 512; i++) {
+		uint32_t map = usb_rd(core, 0x800 + 4 * i);
+		if (map == 0 || ((map >> 8) & 0xfff) != peripheral) {
+			continue;
+		}
+		if (found < 0 || (usb_rd(cnfg, 0x700 + 4 * i) & 7) == 0) {
+			found = (int)i;         /* prefer the channel we own */
+		}
+	}
+	return found;
+}
+
+/* One byte of PMIC 0 at addr. Returns 0 on success. */
+static int
+spmi_byte(bool write, unsigned addr, uint8_t *val)
+{
+	int channel = spmi_channel(addr >> 8);
+	if (channel < 0) {
+		return -1;
+	}
+	vm_offset_t ch = ml_io_map((write ? SPMI_CHNLS_PA : SPMI_OBSRVR_PA) + 0x8000u * (uint32_t)channel, 0x1000);
+	if (ch == 0) {
+		return -1;
+	}
+	if (write) {
+		*(volatile uint32_t *)(ch + SPMI_WDATA) = *val;
+		__asm__ volatile ("dsb sy" ::: "memory");
+	}
+	*(volatile uint32_t *)(ch + SPMI_CMD) = ((write ? 0u : 1u) << 27) | ((addr & 0xffu) << 4);
+	__asm__ volatile ("dsb sy" ::: "memory");
+	for (int i = 0; i < 1000; i++) {
+		uint32_t st = usb_rd(ch, SPMI_STATUS);
+		if (st & 1) {
+			if (st & 0xe) {
+				return -2;
+			}
+			if (!write) {
+				*val = (uint8_t)usb_rd(ch, SPMI_RDATA);
+			}
+			return 0;
+		}
+		delay(1);
+	}
+	return -3;
+}
+
+/* Read, change the masked bits, write back. */
+static int
+spmi_update(unsigned addr, uint8_t mask, uint8_t bits)
+{
+	uint8_t v = 0;
+	int r = spmi_byte(false, addr, &v);
+	if (r == 0) {
+		v = (uint8_t)((v & ~mask) | bits);
+		r = spmi_byte(true, addr, &v);
+	}
+	return r;
+}
+
+static void
+ud_reboot_bootloader(void)
+{
+	int r = spmi_update(PON_SOFT_RB_SPARE, 0xfe, (uint8_t)(PON_REASON_BOOTLOADER << 1));
+	if (r == 0) {
+		r = spmi_update(PON_PS_HOLD_RST_CTL2, 0x80, 0);         /* off while the type changes */
+		delay(500);
+	}
+	if (r == 0) {
+		r = spmi_update(PON_PS_HOLD_RST_CTL, 0x0f, 1);          /* warm reset */
+	}
+	if (r == 0) {
+		r = spmi_update(PON_PS_HOLD_RST_CTL2, 0x80, 0x80);
+		delay(500);
+	}
+	printf("LV USB: restart reason bootloader: %s (%d)\n", r == 0 ? "set" : "FAILED", r);
+	vm_offset_t ps = r == 0 ? ml_io_map(PS_HOLD_PA, 0x1000) : 0;
+	if (ps != 0) {
+		*(volatile uint32_t *)ps = 0;                           /* PS_HOLD low: the PMIC resets the phone */
+		__asm__ volatile ("dsb sy" ::: "memory");
+		delay(2000000);
+	}
+	printf("LV USB: still running, the phone was not reset\n");
+}
+
 /* PSCI SYSTEM_RESET: a cold reset, the phone then boots its installed system. */
 static void
 ud_system_reset(void)
@@ -397,6 +518,8 @@ ud_rx_done(void)
 	} else if (strcmp(cmd, "lv:reset") == 0) {
 		printf("LV USB: reset requested by the host\n");
 		ud_system_reset();
+	} else if (strcmp(cmd, "lv:fastboot") == 0) {
+		ud_reboot_bootloader();
 	} else {
 		printf("LV USB: unknown command \"%s\"\n", cmd);
 	}
