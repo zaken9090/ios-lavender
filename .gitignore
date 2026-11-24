@@ -1,0 +1,12 @@
+*.img
+*.simg
+*.ipsw
+*.bin
+*.o
+*.elf
+*.a
+*.dmg
+dump/
+build/
+out/
+__pycache__/
