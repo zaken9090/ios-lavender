@@ -359,6 +359,58 @@ static void gold_clock_ladder(void)
     fg = WHITE;
 }
 
+/* ---- interrupt controller ---- */
+
+#define GICD_BASE       0x17a00000UL
+#define GICR_BASE       0x17b00000UL
+#define GICR_STRIDE     0x20000UL
+#define GICR_TYPER      0x08
+#define GICR_WAKER      0x14
+#define GICR_SGI_FRAME  0x10000
+#define GICR_IGROUPR0   (GICR_SGI_FRAME + 0x080)
+#define GICR_ISENABLER0 (GICR_SGI_FRAME + 0x100)
+#define GICR_ICENABLER0 (GICR_SGI_FRAME + 0x180)
+#define GICR_IPRIORITYR (GICR_SGI_FRAME + 0x400)
+#define VTIMER_INTID    19
+#define PTIMER_INTID    18
+
+/*
+ * XNU's GIC driver from the base patch series expects the state Linux would have set up:
+ * distributor enabled for Group 1 with affinity routing, the Gold redistributors awake with
+ * their SGIs and timer interrupts in Group 1, and the system-register CPU interface on.
+ */
+static void gic_prepare(void)
+{
+    WRITE_SYSREG(S3_0_C12_C12_5, READ_SYSREG(S3_0_C12_C12_5) | 1);     /* ICC_SRE_EL1.SRE */
+    ISB();
+    wr32(GICD_BASE, rd32(GICD_BASE) | 0x13);                            /* EnableGrp1, EnableGrp1A, ARE_NS */
+    for (int n = 0; (rd32(GICD_BASE) & (1u << 31)) && n < 1000000; n++)
+        ;
+
+    int found = 0;
+    for (u64 r = GICR_BASE; r < GICR_BASE + 8 * GICR_STRIDE; r += GICR_STRIDE) {
+        u32 affinity = rd32(r + GICR_TYPER + 4);                        /* TYPER[63:32] */
+        if ((affinity & 0xffff00) != 0x100)
+            continue;                                                   /* not a Gold core */
+        found++;
+        wr32(r + GICR_WAKER, rd32(r + GICR_WAKER) & ~2u);               /* clear ProcessorSleep */
+        for (int n = 0; (rd32(r + GICR_WAKER) & 4) && n < 100000; n++)
+            ;
+        wr32(r + GICR_IGROUPR0, 0xffffffff);
+        for (u32 id = 0; id < 32; id++)
+            *(volatile u8 *)(r + GICR_IPRIORITYR + id) = 0xa0;
+        wr32(r + GICR_ICENABLER0, 0xffffffff);
+        wr32(r + GICR_ISENABLER0, 0xffff | (1u << VTIMER_INTID) | (1u << PTIMER_INTID));
+    }
+
+    WRITE_SYSREG(S3_0_C12_C12_4, READ_SYSREG(S3_0_C12_C12_4) & ~2UL);  /* ICC_CTLR_EL1: EOImode 0 */
+    WRITE_SYSREG(S3_0_C4_C6_0, 0xf0);                                   /* ICC_PMR_EL1 */
+    WRITE_SYSREG(S3_0_C12_C12_3, 0);                                    /* ICC_BPR1_EL1 */
+    WRITE_SYSREG(S3_0_C12_C12_7, 1);                                    /* ICC_IGRPEN1_EL1 */
+    ISB();
+    kprintf("GIC: %d Gold redistributors, GICD_CTLR %x\n", (u64)found, (u64)rd32(GICD_BASE));
+}
+
 /* ---- payload loader (format: tools/mkpayload.py) ---- */
 
 struct payload {
@@ -428,6 +480,7 @@ static void load_payload(void)
     ba->mem_size = ba->mem_size_actual = p->mem_size;
     ba->top_of_kernel_data = top;
     ba->video.base = FB_BASE;
+    ba->video.display = 1;
     ba->video.row_bytes = FB_W * 4;
     ba->video.width = FB_W;
     ba->video.height = FB_H;
@@ -478,8 +531,10 @@ void gold_main(void)
     kprintf("G clock %d MHz\n", cpu_mhz());
     gold_clock_ladder();
     kprintf("4 MB fill, final:   %d ms\n", mem_fill_ms());
-    if (have_payload())
+    if (have_payload()) {
+        gic_prepare();
         load_payload();
+    }
     kprintf("no payload\n");
     countdown_and_reset();
 }
