@@ -23,12 +23,18 @@ function Wait-Until([scriptblock]$test, [int]$seconds) {
     return $false
 }
 
+# usblog.py reports on stderr; PowerShell 5.1 under "Stop" turns any stderr line into an error.
+function Send-Command([string]$cmd) {
+    $ErrorActionPreference = "Continue"
+    python $usblog --wait 3 --idle 0 --cmd $cmd 2>$null | Out-Null
+    return $LASTEXITCODE
+}
+
 if (-not (Test-Fastboot)) {
     if (Test-Adb) {
         & $adb reboot bootloader
-    } else {
-        python $usblog --wait 3 --idle 0 --cmd lv:fastboot 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 2) { throw "phone not found: not in fastboot, no adb, no USB log device" }
+    } elseif ((Send-Command "lv:fastboot") -eq 2) {
+        throw "phone not found: not in fastboot, no adb, no USB log device"
     }
     if (-not (Wait-Until { Test-Fastboot } 60)) { throw "the phone did not reach fastboot" }
 }
@@ -39,6 +45,6 @@ if ($Until) { $logArgs += @("--until", $Until) }
 $ErrorActionPreference = "Continue"     # usblog reports on stderr
 python @logArgs 2>$null
 if ($Back) {
-    python $usblog --wait 3 --idle 0 --cmd lv:fastboot 2>$null | Out-Null
+    $null = Send-Command "lv:fastboot"
     if (Wait-Until { Test-Fastboot } 30) { Write-Host "`nback in fastboot" } else { Write-Host "`nNOT back in fastboot" }
 }

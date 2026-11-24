@@ -570,8 +570,12 @@ ud_tx_shot(void)
 	if (ud.shot_left == 0) {
 		return false;
 	}
+	/*
+	 * No cache maintenance here: the framebuffer is outside the RAM the kernel manages
+	 * (flush_dcache64 by physical address panics in phystokv), and the panel scans it, so its
+	 * writers already keep it coherent.
+	 */
 	uint32_t n = (uint32_t)MIN(ud.shot_left, 1ull << 20);
-	flush_dcache64((addr64_t)ud.shot_pa, n, TRUE);
 	ud.tx_busy = true;
 	ud_start_trb_pa(EP_TX, UD_TRB_TX, ud.shot_pa, n, TRBCTL_NORMAL);
 	ud.shot_pa += n;
