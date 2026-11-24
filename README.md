@@ -1,8 +1,11 @@
 # ios-lavender
 
 Experimental port of iOS 16.7.16 (XNU 8796, iPhone X user space) to the Xiaomi Redmi Note 7
-(`lavender`, Qualcomm SDM660). Research project, work in progress: nothing boots from this
-repository yet.
+(`lavender`, Qualcomm SDM660). Research project, work in progress.
+
+Status (2026-11-24): the shim starts a Gold core at 2.2 GHz with a 16K-page MMU and the XNU kernel
+boots to the root-device wait with its log on the screen. No storage driver, no user space yet.
+See `docs/HARDWARE.md` for measured hardware facts.
 
 Boot chain: ABL -> `fastboot boot` shim -> XNU + generated Apple Device Tree -> HFS+ root in `userdata`.
 
