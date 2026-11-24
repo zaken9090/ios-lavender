@@ -102,6 +102,7 @@ Read from the phone screen after `fastboot boot` of `shim/` (probe builds v1 and
 | 16K MMU on Gold | works: one level-2 table, 32 MB blocks, TCR 0x20080b51c, SCTLR 0xc01805 |
 | 4 MB RAM fill on Gold | 105 ms with MMU/caches off at 149 MHz, 3 ms with caches on, under 1 ms at 2207 MHz |
 | PSCI SYSTEM_RESET | cold reset, the phone boots Android |
+| Payload loader self-test | 4/4 checks pass (`build.ps1 -SelfTest`): boot_args revision, load address, command line, MMU off at entry |
 
 Gold clock sequence (register meanings from the Linux `clk-cpu-osm` driver and the first attempt's notes):
 PLL at 0x17816000 (+0 mode, +4 L, rate = L x 19.2 MHz, +0x2c bit 16 = locked); Gold RCG cfg 0x17811054,
