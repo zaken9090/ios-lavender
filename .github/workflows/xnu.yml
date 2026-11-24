@@ -19,9 +19,13 @@ on:
       keep_going:
         description: "make -k: report every compile error in one run"
         default: "true"
+      fresh:
+        description: "true = ignore the cached KDK and prerequisite tools"
+        default: "false"
 
 concurrency:
-  group: xnu-${{ github.ref }}
+  # one run per runner type, so the same commit can be built on both and the first result used
+  group: xnu-${{ github.ref }}-${{ inputs.runner || 'macos-15' }}
   cancel-in-progress: true
 
 env:
@@ -83,6 +87,30 @@ jobs:
             chmod +x "$CCACHE_WRAP/$t"
           done
 
+      # The Kernel Debug Kit (download + install, ~2.5 min) and the tools built before the kernel
+      # (mig, ctf tools, libfirehose, ...; ~2 min) do not depend on our patches. The build script
+      # skips each of them when it finds the result, so they are cached. Headers that come from
+      # the patched xnu itself are removed from the cache and installed again every time.
+      - name: Restore KDK and prerequisite tools
+        id: prereq
+        if: ${{ inputs.fresh != 'true' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            kdk-cache
+            dxb/fakeroot
+          key: prereq-${{ runner.arch }}-${{ env.DXB_SHA }}-v1
+
+      - name: Place cached KDK
+        run: |
+          if [ -d kdk-cache/KDK_13.5_22G74.kdk ]; then
+            sudo mkdir -p /Library/Developer/KDKs
+            sudo mv kdk-cache/KDK_13.5_22G74.kdk /Library/Developer/KDKs/
+          fi
+          rm -f dxb/fakeroot/.xnu_headers_installed dxb/fakeroot/usr/include/os/proc.h
+          rm -rf dxb/fakeroot/System/Library/Kernels
+          ls /Library/Developer/KDKs 2>/dev/null || true
+
       - name: Restore ccache
         uses: actions/cache@v4
         with:
@@ -126,6 +154,25 @@ jobs:
           find dxb/fakeroot/System/Library/Kernels -maxdepth 1 -type f -name 'kernel.*' -exec cp {} out/ \;
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
+
+      - name: Stage KDK and prerequisite tools for the cache
+        if: success() && steps.prereq.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p kdk-cache
+          sudo cp -R /Library/Developer/KDKs/KDK_13.5_22G74.kdk kdk-cache/
+          sudo chown -R "$(id -u)" kdk-cache
+          rm -rf dxb/fakeroot/System/Library/Kernels
+          rm -f dxb/fakeroot/.xnu_headers_installed dxb/fakeroot/usr/include/os/proc.h
+          du -sh kdk-cache dxb/fakeroot
+
+      - name: Save KDK and prerequisite tools
+        if: success() && steps.prereq.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            kdk-cache
+            dxb/fakeroot
+          key: prereq-${{ runner.arch }}-${{ env.DXB_SHA }}-v1
 
       - uses: actions/upload-artifact@v4
         if: always()
