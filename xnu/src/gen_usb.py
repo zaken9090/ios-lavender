@@ -28,6 +28,7 @@ for key, val in (('@DEV@', arr(dev)), ('@CFG@', arr(cfg)), ('@BOS@', arr(bos)), 
                  ('@DEVN@', str(len(dev))), ('@CFGN@', str(len(cfg))), ('@BOSN@', str(len(bos))),
                  ('@MSOSN@', str(len(msos))), ('@GUID@', GUID), ('@VENDOR@', '0x%02x' % VENDOR_CODE)):
     src = src.replace(key, val)
-assert '@' not in src.replace('@(#)', ''), [l for l in src.split('\n') if '@' in l][:3]
+left = [w for w in src.split() if w.startswith('@') and w.endswith('@') and w[1:-1].isupper()]
+assert not left, left
 open(sys.argv[1] + '/bsd/dev/sweet_usb.c', 'w', newline='\n').write(src)
 print('msos', len(msos), 'bos', len(bos))
