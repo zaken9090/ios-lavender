@@ -10,12 +10,36 @@ usage: usblog.py [--out FILE] [--wait SECONDS] [--idle SECONDS] [--until TEXT] [
   --idle N       stop after N seconds without new log bytes (default: run until Ctrl+C)
   --until TEXT   stop when TEXT appears in the log
   --cmd TEXT     send a command (lv:ping, lv:reset, lv:fastboot) once connected; with --idle 0 exit right after
+  --shot FILE    save what the panel shows as a PNG (lv:shot) and exit
 """
 import argparse
 import ctypes
 import ctypes.wintypes as wt
+import re
+import struct
 import sys
 import time
+import zlib
+
+SHOT_HEADER = re.compile(rb"\n@@LVSHOT (\d+) (\d+) (\d+) (\d+)@@\n")
+
+
+def save_png(path, raw, width, height, stride):
+    """x8r8g8b8 little endian (bytes B, G, R, X) -> 8-bit RGB PNG."""
+    rows = bytearray()
+    for y in range(height):
+        line = raw[y * stride:y * stride + width * 4]
+        rgb = bytearray(width * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = line[2::4], line[1::4], line[0::4]
+        rows += b"\0" + rgb
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+           chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
 
 GUID_TEXT = "{7B1E8D2A-5C3F-4E6B-9A1D-4C41564E4452}"      # DeviceInterfaceGUIDs in the phone's descriptors
 EP_IN, EP_OUT = 0x81, 0x01
@@ -123,6 +147,7 @@ def main():
     ap.add_argument("--idle", type=float)
     ap.add_argument("--until")
     ap.add_argument("--cmd")
+    ap.add_argument("--shot")
     a = ap.parse_args()
 
     deadline = time.time() + a.wait
@@ -139,13 +164,37 @@ def main():
     seen = b""
     last = time.time()
     status = 0
+    shot = None                     # with --shot: bytes received after the request
     try:
         if a.cmd:
             phone.write(a.cmd.encode())
             if a.idle == 0:
                 return 0
+        if a.shot:
+            phone.write(b"lv:shot")
+            shot = bytearray()
+            last = time.time()
         while True:
             data = phone.read()
+            if shot is not None:
+                if data:
+                    shot += data
+                    last = time.time()
+                m = SHOT_HEADER.search(shot)
+                if m:
+                    width, height, stride, size = map(int, m.groups())
+                    if len(shot) - m.end() >= size:
+                        raw = bytes(shot[m.end():m.end() + size])
+                        save_png(a.shot, raw, width, height, stride)
+                        print(f"usblog: {a.shot} {width}x{height}", file=sys.stderr)
+                        if out:
+                            out.write(bytes(shot[:m.start()]) + bytes(shot[m.end() + size:]))
+                        break
+                elif time.time() - last > 10:
+                    print("usblog: no screenshot header (old kernel?)", file=sys.stderr)
+                    status = 1
+                    break
+                continue
             if data:
                 last = time.time()
                 sys.stdout.write(data.decode("utf-8", "replace"))

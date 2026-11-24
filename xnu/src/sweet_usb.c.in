@@ -5,7 +5,9 @@
  * WinUSB by itself (Microsoft OS 2.0 descriptors), so the PC needs no driver:
  *   bulk IN  0x81  the console log ring, from the first boot message on
  *   bulk OUT 0x01  one text command per packet: "lv:ping", "lv:reset" (boots the installed
- *                  system), "lv:fastboot" (reboots into the bootloader)
+ *                  system), "lv:fastboot" (reboots into the bootloader), "lv:shot" (the
+ *                  framebuffer: a text line "@@LVSHOT width height stride bytes@@" in the log,
+ *                  then exactly that many raw bytes, x8r8g8b8)
  * The PC side is tools/usblog.py.
  *
  * The controller is the Synopsys DWC3 at 0x0a800000 that ABL has just used for fastboot: it is
@@ -25,6 +27,7 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <pexpert/pexpert.h>
+#include <pexpert/device_tree.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
@@ -136,6 +139,8 @@ static struct {
 	uint32_t    resource[4];        /* transfer resource index per physical endpoint */
 	uint64_t    log_pos;
 	uint64_t    tx_bytes;
+	bool        shot_pending;
+	uint64_t    shot_pa, shot_left;     /* framebuffer bytes still to send */
 } ud;
 
 static uint32_t
@@ -192,12 +197,11 @@ ud_epcmd(unsigned ep, uint32_t cmd, uint32_t p0, uint32_t p1, uint32_t p2)
 	return -1;
 }
 
-/* One TRB (at DMA offset trb) on physical endpoint ep. */
+/* One TRB (at DMA offset trb) on physical endpoint ep, for the data at physical address bpa. */
 static void
-ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
+ud_start_trb_pa(unsigned ep, uint32_t trb, uint64_t bpa, uint32_t len, uint32_t ctl)
 {
 	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + trb);
-	uint64_t bpa = ud.dma_pa + buf;
 	uint64_t tpa = ud.dma_pa + trb;
 
 	t[0] = (uint32_t)bpa;
@@ -205,12 +209,19 @@ ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl
 	t[2] = len;
 	t[3] = ctl | TRB_HWO | TRB_LST | TRB_ISP_IMI | TRB_IOC;
 	ud_sync(trb, 16);
-	if (len) {
-		ud_sync(buf, len);
-	}
 	if (ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0) == 0 && ep < 4) {
 		ud.resource[ep] = (dwc_rd(DEPCMD(ep)) >> 16) & 0x7f;
 	}
+}
+
+/* The same for a buffer inside our DMA area (offset buf). */
+static void
+ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
+{
+	if (len) {
+		ud_sync(buf, len);
+	}
+	ud_start_trb_pa(ep, trb, ud.dma_pa + buf, len, ctl);
 }
 
 static void
@@ -520,16 +531,59 @@ ud_rx_done(void)
 		ud_system_reset();
 	} else if (strcmp(cmd, "lv:fastboot") == 0) {
 		ud_reboot_bootloader();
+	} else if (strcmp(cmd, "lv:shot") == 0) {
+		ud.shot_pending = true;
 	} else {
 		printf("LV USB: unknown command \"%s\"\n", cmd);
 	}
 }
 
-/* Send the next piece of the console log if the IN endpoint is idle. */
+/*
+ * lv:shot: the panel's framebuffer (/sweet-fbcon in the device tree) goes out by DMA straight from
+ * its physical address, 1 MiB per transfer, after a text header in the log stream.
+ */
+static bool
+ud_tx_shot(void)
+{
+	if (ud.shot_pending) {
+		DTEntry node;
+		uint64_t const *reg = NULL;
+		uint32_t const *w = NULL, *h = NULL, *stride = NULL;
+		unsigned int size = 0;
+		ud.shot_pending = false;
+		if (SecureDTLookupEntry(NULL, "/sweet-fbcon", &node) != kSuccess ||
+		    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess || size < 16 ||
+		    SecureDTGetProperty(node, "width", (void const **)&w, &size) != kSuccess ||
+		    SecureDTGetProperty(node, "height", (void const **)&h, &size) != kSuccess ||
+		    SecureDTGetProperty(node, "stride", (void const **)&stride, &size) != kSuccess) {
+			printf("LV USB: no /sweet-fbcon for lv:shot\n");
+			return false;
+		}
+		ud.shot_pa = reg[0];
+		ud.shot_left = (uint64_t)*stride * *h;
+		uint32_t n = (uint32_t)snprintf((char *)(ud.dma + UD_TX), UD_BUF_MAX, "\n@@LVSHOT %u %u %u %llu@@\n",
+		    *w, *h, *stride, ud.shot_left);
+		ud.tx_busy = true;
+		ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, n, TRBCTL_NORMAL);
+		return true;
+	}
+	if (ud.shot_left == 0) {
+		return false;
+	}
+	uint32_t n = (uint32_t)MIN(ud.shot_left, 1ull << 20);
+	flush_dcache64((addr64_t)ud.shot_pa, n, TRUE);
+	ud.tx_busy = true;
+	ud_start_trb_pa(EP_TX, UD_TRB_TX, ud.shot_pa, n, TRBCTL_NORMAL);
+	ud.shot_pa += n;
+	ud.shot_left -= n;
+	return true;
+}
+
+/* Send the next piece of the console log (or of a screenshot) if the IN endpoint is idle. */
 static void
 ud_tx_log(void)
 {
-	if (!ud.configured || ud.tx_busy) {
+	if (!ud.configured || ud.tx_busy || ud_tx_shot()) {
 		return;
 	}
 	uint32_t n = sweet_log_copy(&ud.log_pos, (char *)(ud.dma + UD_TX), UD_LOG_CHUNK);

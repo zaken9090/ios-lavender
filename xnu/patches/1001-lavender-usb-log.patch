@@ -2,17 +2,17 @@ lavender: kernel log over USB, WinUSB (no driver needed on Windows)
 
 - bsd/dev/sweet_usb.c rewritten for SDM660: DWC3 at 0x0a800000, one vendor interface with
   Microsoft OS 2.0 descriptors, bulk IN carries the console log ring from the first boot
-  message, bulk OUT takes text commands: lv:ping, lv:reset, lv:fastboot (PM660 restart
+  message, bulk OUT takes text commands: lv:ping, lv:reset, lv:shot (framebuffer), lv:fastboot (PM660 restart
   reason over the SPMI arbiter, then a warm PS_HOLD reset)
 - started from the platform expert, so it does not depend on a storage driver
 - boot-arg lvusb=0 turns it off
 - the source is generated: xnu/src/gen_usb.py + sweet_usb.c.in (USB descriptors are built there)
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index 9c42e45..31178c7 100644
+index 9c42e45..74f5d95 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -1,14 +1,18 @@
+@@ -1,14 +1,20 @@
  /*
 - * SWEET: USB bring-up, step 1 - read-only state probe.
 + * lavender (Redmi Note 7, SDM660): kernel log over USB.
@@ -29,7 +29,9 @@ index 9c42e45..31178c7 100644
 + * WinUSB by itself (Microsoft OS 2.0 descriptors), so the PC needs no driver:
 + *   bulk IN  0x81  the console log ring, from the first boot message on
 + *   bulk OUT 0x01  one text command per packet: "lv:ping", "lv:reset" (boots the installed
-+ *                  system), "lv:fastboot" (reboots into the bootloader)
++ *                  system), "lv:fastboot" (reboots into the bootloader), "lv:shot" (the
++ *                  framebuffer: a text line "@@LVSHOT width height stride bytes@@" in the log,
++ *                  then exactly that many raw bytes, x8r8g8b8)
 + * The PC side is tools/usblog.py.
 + *
 + * The controller is the Synopsys DWC3 at 0x0a800000 that ABL has just used for fastboot: it is
@@ -40,7 +42,7 @@ index 9c42e45..31178c7 100644
   */
  #if defined(ARM64_BOARD_CONFIG_SWEET)
  #include <sys/param.h>
-@@ -21,129 +25,26 @@
+@@ -21,129 +27,27 @@
  #include <vm/pmap.h>
  #include <vm/vm_kern.h>
  #include <pexpert/pexpert.h>
@@ -56,6 +58,7 @@ index 9c42e45..31178c7 100644
 -#include <net/kpi_interface.h>
 -#include <net/kpi_protocol.h>
 -#include <netinet/in.h>
++#include <pexpert/device_tree.h>
  
  extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 -void sweet_usb_probe(void);
@@ -181,7 +184,7 @@ index 9c42e45..31178c7 100644
  #define GEVNTADRLO      0xc400
  #define GEVNTADRHI      0xc404
  #define GEVNTSIZ        0xc408
-@@ -158,19 +59,6 @@ sweet_usb_probe(void)
+@@ -158,19 +62,6 @@ sweet_usb_probe(void)
  #define DEPCMDPAR0(n)   (0xc808 + 0x10 * (n))
  #define DEPCMD(n)       (0xc80c + 0x10 * (n))
  
@@ -201,7 +204,7 @@ index 9c42e45..31178c7 100644
  #define DCTL_RUN_STOP   (1u << 31)
  #define DCTL_CSFTRST    (1u << 30)
  #define DSTS_DEVCTRLHLT (1u << 22)
-@@ -179,13 +67,16 @@ sweet_usb_probe(void)
+@@ -179,13 +70,16 @@ sweet_usb_probe(void)
  #define DEPCMD_SETTRANSFRESOURCE 2
  #define DEPCMD_SETSTALL         4
  #define DEPCMD_STARTTRANSFER    6
@@ -218,7 +221,7 @@ index 9c42e45..31178c7 100644
  #define TRBCTL_SETUP    (2u << 4)
  #define TRBCTL_STATUS2  (3u << 4)
  #define TRBCTL_STATUS3  (4u << 4)
-@@ -196,24 +87,55 @@ sweet_usb_probe(void)
+@@ -196,24 +90,55 @@ sweet_usb_probe(void)
  #define UD_EVT_SIZE     0x1000
  #define UD_TRB_OUT      0x1000          /* ep0 OUT TRB */
  #define UD_TRB_IN       0x1010          /* ep0 IN TRB */
@@ -284,7 +287,7 @@ index 9c42e45..31178c7 100644
  
  static struct {
  	vm_offset_t dwc;
-@@ -222,19 +144,22 @@ static struct {
+@@ -222,19 +147,24 @@ static struct {
  	uint32_t    evt_pos;
  	int         sleep_chan;
  	enum { EP0_SETUP, EP0_DATA, EP0_WAIT_STATUS2, EP0_WAIT_STATUS3, EP0_STATUS } state;
@@ -303,6 +306,8 @@ index 9c42e45..31178c7 100644
 +	uint32_t    resource[4];        /* transfer resource index per physical endpoint */
 +	uint64_t    log_pos;
 +	uint64_t    tx_bytes;
++	bool        shot_pending;
++	uint64_t    shot_pa, shot_left;     /* framebuffer bytes still to send */
  } ud;
  
 +static uint32_t
@@ -316,7 +321,7 @@ index 9c42e45..31178c7 100644
  static inline void
  dwc_wr(uint32_t off, uint32_t v)
  {
-@@ -248,6 +173,7 @@ dwc_rd(uint32_t off)
+@@ -248,6 +178,7 @@ dwc_rd(uint32_t off)
  	return usb_rd(ud.dwc, off);
  }
  
@@ -324,7 +329,7 @@ index 9c42e45..31178c7 100644
  static void
  ud_sync(uint32_t off, uint32_t len)
  {
-@@ -273,16 +199,10 @@ ud_epcmd(unsigned ep, uint32_t cmd, uint32_t p0, uint32_t p1, uint32_t p2)
+@@ -273,40 +204,42 @@ ud_epcmd(unsigned ep, uint32_t cmd, uint32_t p0, uint32_t p1, uint32_t p2)
  	for (int i = 0; i < 1000; i++) {
  		uint32_t v = dwc_rd(DEPCMD(ep));
  		if (!(v & DEPCMD_CMDACT)) {
@@ -342,23 +347,36 @@ index 9c42e45..31178c7 100644
  	return -1;
  }
  
-@@ -292,6 +212,7 @@ ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl
+-/* One TRB (at DMA offset trb) on physical endpoint ep. */
++/* One TRB (at DMA offset trb) on physical endpoint ep, for the data at physical address bpa. */
+ static void
+-ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
++ud_start_trb_pa(unsigned ep, uint32_t trb, uint64_t bpa, uint32_t len, uint32_t ctl)
  {
  	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + trb);
- 	uint64_t bpa = ud.dma_pa + buf;
+-	uint64_t bpa = ud.dma_pa + buf;
 +	uint64_t tpa = ud.dma_pa + trb;
  
  	t[0] = (uint32_t)bpa;
  	t[1] = (uint32_t)(bpa >> 32);
-@@ -301,12 +222,13 @@ ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl
+ 	t[2] = len;
+ 	t[3] = ctl | TRB_HWO | TRB_LST | TRB_ISP_IMI | TRB_IOC;
+ 	ud_sync(trb, 16);
++	if (ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0) == 0 && ep < 4) {
++		ud.resource[ep] = (dwc_rd(DEPCMD(ep)) >> 16) & 0x7f;
++	}
++}
++
++/* The same for a buffer inside our DMA area (offset buf). */
++static void
++ud_start_trb(unsigned ep, uint32_t trb, uint32_t buf, uint32_t len, uint32_t ctl)
++{
  	if (len) {
  		ud_sync(buf, len);
  	}
 -	uint64_t tpa = ud.dma_pa + trb;
 -	ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0);
-+	if (ud_epcmd(ep, DEPCMD_STARTTRANSFER, (uint32_t)(tpa >> 32), (uint32_t)tpa, 0) == 0 && ep < 4) {
-+		ud.resource[ep] = (dwc_rd(DEPCMD(ep)) >> 16) & 0x7f;
-+	}
++	ud_start_trb_pa(ep, trb, ud.dma_pa + buf, len, ctl);
  }
  
  static void
@@ -367,7 +385,7 @@ index 9c42e45..31178c7 100644
  {
  	ud_start_trb(ep, ep ? UD_TRB_IN : UD_TRB_OUT, buf, len, ctl);
  }
-@@ -315,43 +237,16 @@ static void
+@@ -315,43 +248,16 @@ static void
  ud_start_setup(void)
  {
  	ud.state = EP0_SETUP;
@@ -413,7 +431,7 @@ index 9c42e45..31178c7 100644
  static uint32_t
  ud_string(unsigned idx, uint8_t *out)
  {
-@@ -373,22 +268,13 @@ ud_string(unsigned idx, uint8_t *out)
+@@ -373,22 +279,13 @@ ud_string(unsigned idx, uint8_t *out)
  	return n;
  }
  
@@ -439,7 +457,7 @@ index 9c42e45..31178c7 100644
  static void
  ud_configure(void)
  {
-@@ -399,17 +285,33 @@ ud_configure(void)
+@@ -399,17 +296,33 @@ ud_configure(void)
  	    ud_epcmd(EP_RX, DEPCMD_SETEPCONFIG, (2u << 1) | (512u << 3), (1u << 8) | ((uint32_t)EP_RX << 25), 0) ||
  	    ud_epcmd(EP_RX, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
  	    ud_epcmd(EP_TX, DEPCMD_SETEPCONFIG, (2u << 1) | (512u << 3) | (1u << 17), (1u << 8) | ((uint32_t)EP_TX << 25), 0) ||
@@ -480,7 +498,7 @@ index 9c42e45..31178c7 100644
  }
  
  static void
-@@ -424,10 +326,14 @@ ud_setup(void)
+@@ -424,10 +337,14 @@ ud_setup(void)
  	uint32_t n = 0;
  	bool ok = true;
  
@@ -498,7 +516,7 @@ index 9c42e45..31178c7 100644
  	} else if ((type & 0x60) != 0) {
  		ok = false;
  	} else if (req == 6) {          /* GET_DESCRIPTOR */
-@@ -435,31 +341,23 @@ ud_setup(void)
+@@ -435,31 +352,23 @@ ud_setup(void)
  		case 1: memcpy(data, ud_dev_desc, sizeof(ud_dev_desc)); n = sizeof(ud_dev_desc); break;
  		case 2: memcpy(data, ud_cfg_desc, sizeof(ud_cfg_desc)); n = sizeof(ud_cfg_desc); break;
  		case 3: n = ud_string(value & 0xff, data); ok = n != 0; break;
@@ -533,7 +551,7 @@ index 9c42e45..31178c7 100644
  	} else {
  		ok = false;
  	}
-@@ -476,196 +374,189 @@ ud_setup(void)
+@@ -476,196 +385,232 @@ ud_setup(void)
  		if (n > length) {
  			n = length;
  		}
@@ -755,16 +773,90 @@ index 9c42e45..31178c7 100644
  static void
 -ud_if_detach(ifnet_t ifp __unused)
 +ud_system_reset(void)
- {
++{
 +	register uint64_t x0 __asm__("x0") = 0x84000009ULL;
 +	__asm__ volatile ("smc #0" : "+r"(x0) : : "x1", "x2", "x3", "memory");
++}
++
++/* One command per bulk OUT packet. */
++static void
++ud_rx_done(void)
++{
++	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + UD_TRB_RX);
++	char cmd[32];
++
++	ud_sync(UD_TRB_RX, 16);
++	uint32_t len = UD_BUF_MAX - (t[2] & 0xffffff);
++	ud_sync(UD_RX, UD_BUF_MAX);
++	if (len >= sizeof(cmd)) {
++		len = sizeof(cmd) - 1;
++	}
++	memcpy(cmd, (const void *)(ud.dma + UD_RX), len);
++	while (len > 0 && (cmd[len - 1] == '\n' || cmd[len - 1] == '\r' || cmd[len - 1] == ' ')) {
++		len--;
++	}
++	cmd[len] = 0;
++	ud_rx_arm();
++	if (strcmp(cmd, "lv:ping") == 0) {
++		printf("LV USB: pong, %llu log bytes sent\n", ud.tx_bytes);
++	} else if (strcmp(cmd, "lv:reset") == 0) {
++		printf("LV USB: reset requested by the host\n");
++		ud_system_reset();
++	} else if (strcmp(cmd, "lv:fastboot") == 0) {
++		ud_reboot_bootloader();
++	} else if (strcmp(cmd, "lv:shot") == 0) {
++		ud.shot_pending = true;
++	} else {
++		printf("LV USB: unknown command \"%s\"\n", cmd);
++	}
++}
++
++/*
++ * lv:shot: the panel's framebuffer (/sweet-fbcon in the device tree) goes out by DMA straight from
++ * its physical address, 1 MiB per transfer, after a text header in the log stream.
++ */
++static bool
++ud_tx_shot(void)
+ {
++	if (ud.shot_pending) {
++		DTEntry node;
++		uint64_t const *reg = NULL;
++		uint32_t const *w = NULL, *h = NULL, *stride = NULL;
++		unsigned int size = 0;
++		ud.shot_pending = false;
++		if (SecureDTLookupEntry(NULL, "/sweet-fbcon", &node) != kSuccess ||
++		    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess || size < 16 ||
++		    SecureDTGetProperty(node, "width", (void const **)&w, &size) != kSuccess ||
++		    SecureDTGetProperty(node, "height", (void const **)&h, &size) != kSuccess ||
++		    SecureDTGetProperty(node, "stride", (void const **)&stride, &size) != kSuccess) {
++			printf("LV USB: no /sweet-fbcon for lv:shot\n");
++			return false;
++		}
++		ud.shot_pa = reg[0];
++		ud.shot_left = (uint64_t)*stride * *h;
++		uint32_t n = (uint32_t)snprintf((char *)(ud.dma + UD_TX), UD_BUF_MAX, "\n@@LVSHOT %u %u %u %llu@@\n",
++		    *w, *h, *stride, ud.shot_left);
++		ud.tx_busy = true;
++		ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, n, TRBCTL_NORMAL);
++		return true;
++	}
++	if (ud.shot_left == 0) {
++		return false;
++	}
++	uint32_t n = (uint32_t)MIN(ud.shot_left, 1ull << 20);
++	flush_dcache64((addr64_t)ud.shot_pa, n, TRUE);
++	ud.tx_busy = true;
++	ud_start_trb_pa(EP_TX, UD_TRB_TX, ud.shot_pa, n, TRBCTL_NORMAL);
++	ud.shot_pa += n;
++	ud.shot_left -= n;
++	return true;
  }
  
 -/* ue0, 192.168.7.2/24 (the host side is 192.168.7.1). */
-+/* One command per bulk OUT packet. */
++/* Send the next piece of the console log (or of a screenshot) if the IN endpoint is idle. */
  static void
 -ud_if_create(void)
-+ud_rx_done(void)
++ud_tx_log(void)
  {
 -	struct ifnet_init_eparams init;
 -	static lck_grp_t *grp;
@@ -795,38 +887,7 @@ index 9c42e45..31178c7 100644
 -	if (ifnet_allocate_extended(&init, &ud.ifp) != 0) {
 -		printf("SWEET USB: ifnet_allocate failed\n");
 -		ud.ifp = NULL;
-+	volatile uint32_t *t = (volatile uint32_t *)(ud.dma + UD_TRB_RX);
-+	char cmd[32];
-+
-+	ud_sync(UD_TRB_RX, 16);
-+	uint32_t len = UD_BUF_MAX - (t[2] & 0xffffff);
-+	ud_sync(UD_RX, UD_BUF_MAX);
-+	if (len >= sizeof(cmd)) {
-+		len = sizeof(cmd) - 1;
-+	}
-+	memcpy(cmd, (const void *)(ud.dma + UD_RX), len);
-+	while (len > 0 && (cmd[len - 1] == '\n' || cmd[len - 1] == '\r' || cmd[len - 1] == ' ')) {
-+		len--;
-+	}
-+	cmd[len] = 0;
-+	ud_rx_arm();
-+	if (strcmp(cmd, "lv:ping") == 0) {
-+		printf("LV USB: pong, %llu log bytes sent\n", ud.tx_bytes);
-+	} else if (strcmp(cmd, "lv:reset") == 0) {
-+		printf("LV USB: reset requested by the host\n");
-+		ud_system_reset();
-+	} else if (strcmp(cmd, "lv:fastboot") == 0) {
-+		ud_reboot_bootloader();
-+	} else {
-+		printf("LV USB: unknown command \"%s\"\n", cmd);
-+	}
-+}
-+
-+/* Send the next piece of the console log if the IN endpoint is idle. */
-+static void
-+ud_tx_log(void)
-+{
-+	if (!ud.configured || ud.tx_busy) {
++	if (!ud.configured || ud.tx_busy || ud_tx_shot()) {
  		return;
  	}
 -	ifnet_set_addrlen(ud.ifp, ETHER_ADDR_LEN);
@@ -879,7 +940,7 @@ index 9c42e45..31178c7 100644
  }
  
  static void
-@@ -674,18 +565,16 @@ ud_event(uint32_t ev)
+@@ -674,18 +619,16 @@ ud_event(uint32_t ev)
  	if (ev & 1) {                   /* device event */
  		uint32_t type = (ev >> 8) & 0xf;
  		if (type == 1) {        /* USB reset */
@@ -904,7 +965,7 @@ index 9c42e45..31178c7 100644
  		}
  		return;
  	}
-@@ -693,24 +582,24 @@ ud_event(uint32_t ev)
+@@ -693,24 +636,24 @@ ud_event(uint32_t ev)
  	unsigned type = (ev >> 6) & 0xf;
  	unsigned status = (ev >> 12) & 0xf;
  
@@ -939,7 +1000,7 @@ index 9c42e45..31178c7 100644
  	 * with status "control status"; its completion re-arms SETUP.
  	 */
  	if (type == 1) {                /* XferComplete */
-@@ -734,7 +623,7 @@ ud_event(uint32_t ev)
+@@ -734,7 +677,7 @@ ud_event(uint32_t ev)
  		if (ud.state == EP0_WAIT_STATUS2 || ud.state == EP0_WAIT_STATUS3) {
  			uint32_t ctl = ud.state == EP0_WAIT_STATUS3 ? TRBCTL_STATUS3 : TRBCTL_STATUS2;
  			ud.state = EP0_STATUS;
@@ -948,7 +1009,7 @@ index 9c42e45..31178c7 100644
  		}
  	}
  }
-@@ -742,7 +631,6 @@ ud_event(uint32_t ev)
+@@ -742,7 +685,6 @@ ud_event(uint32_t ev)
  static void
  ud_thread(void *arg __unused, wait_result_t wr __unused)
  {
@@ -956,7 +1017,7 @@ index 9c42e45..31178c7 100644
  	for (;;) {
  		uint32_t count = dwc_rd(GEVNTCOUNT) & 0xffff;
  		if (count) {
-@@ -750,77 +638,24 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -750,77 +692,24 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
  			for (uint32_t done = 0; done < count; done += 4) {
  				uint32_t ev = *(volatile uint32_t *)(ud.dma + UD_EVT + ud.evt_pos);
  				ud.evt_pos = (ud.evt_pos + 4) % UD_EVT_SIZE;
@@ -1038,7 +1099,7 @@ index 9c42e45..31178c7 100644
  		return;
  	}
  	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)ud.dma);
-@@ -828,17 +663,14 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+@@ -828,17 +717,14 @@ sweet_usb_gadget_start(vm_offset_t dwc)
  		return;
  	}
  	ud.dma_pa = ptoa_64(pn);
@@ -1057,7 +1118,7 @@ index 9c42e45..31178c7 100644
  		return;
  	}
  
-@@ -848,11 +680,8 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+@@ -848,11 +734,8 @@ sweet_usb_gadget_start(vm_offset_t dwc)
  	dwc_wr(GEVNTCOUNT, dwc_rd(GEVNTCOUNT) & 0xffff);
  	ud.evt_pos = 0;
  
@@ -1071,7 +1132,7 @@ index 9c42e45..31178c7 100644
  
  	/* Endpoint 0 OUT/IN: start config, control type, max packet 512 until connect done. */
  	if (ud_epcmd(0, DEPCMD_DEPSTARTCFG, 0, 0, 0) ||
-@@ -860,36 +689,51 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+@@ -860,36 +743,51 @@ sweet_usb_gadget_start(vm_offset_t dwc)
  	    ud_epcmd(0, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
  	    ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (512u << 3), (1u << 8) | (1u << 10) | (1u << 25), 0) ||
  	    ud_epcmd(1, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0)) {
