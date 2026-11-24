@@ -56,6 +56,25 @@ secondary_entry:
 1:  wfi
     b       1b
 
+/* x0 = entry (physical), x1 = boot_args (physical). Turns the MMU and caches off and jumps. */
+    .globl jump_kernel
+jump_kernel:
+    mov     x19, x0
+    mov     x20, x1
+    mrs     x2, sctlr_el1
+    bic     x2, x2, #0x1            /* M */
+    bic     x2, x2, #0x4            /* C */
+    bic     x2, x2, #0x1000         /* I */
+    msr     sctlr_el1, x2
+    isb
+    tlbi    vmalle1
+    dsb     sy
+    ic      iallu
+    dsb     sy
+    isb
+    mov     x0, x20
+    br      x19
+
 /* x0 = function id, x1..x3 = arguments */
     .globl smc_call
 smc_call:

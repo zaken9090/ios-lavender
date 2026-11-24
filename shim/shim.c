@@ -359,6 +359,102 @@ static void gold_clock_ladder(void)
     fg = WHITE;
 }
 
+/* ---- payload loader (format: tools/mkpayload.py) ---- */
+
+struct payload {
+    char magic[8];                              /* "LVPAYLD1" */
+    u64 total_size;
+    u64 virt_base, entry_va, phys_base, mem_size;
+    u64 image_off, image_size, image_va, image_memsize;
+    u64 adt_off, adt_size;
+    u64 ramdisk_off, ramdisk_size;
+    u64 reserved[2];
+    char cmdline[608];
+};
+
+/* pexpert/pexpert/arm64/boot.h, xnu-8796 */
+struct boot_args {
+    unsigned short revision, version;
+    u64 virt_base, phys_base, mem_size, top_of_kernel_data;
+    struct { u64 base, display, row_bytes, width, height, depth; } video;
+    u32 machine_type;
+    void *device_tree;
+    u32 device_tree_length;
+    char cmdline[608];
+    u64 boot_flags, mem_size_actual;
+};
+
+extern u8 _image_start[], _payload[];
+void jump_kernel(u64 entry_pa, u64 boot_args_pa) __attribute__((noreturn));
+
+#define PAGE_16K 0x4000UL
+#define ALIGN_UP(v, a) (((v) + (a) - 1) & ~((a) - 1))
+
+/* Write cached data back to RAM and drop it: the next stage starts with caches off. */
+static void flush_range(u64 start, u64 size)
+{
+    for (u64 a = start & ~63UL; a < start + size; a += 64)
+        __asm__ volatile("dc civac, %0" :: "r"(a));
+    __asm__ volatile("dsb sy");
+}
+
+static void load_payload(void)
+{
+    const struct payload *p = (const struct payload *)_payload;
+    const u8 *base = (const u8 *)p;
+    u64 delta = p->phys_base - p->virt_base;                /* pa = va + delta */
+    u64 image_pa = p->image_va + delta;
+    u64 top = ALIGN_UP(image_pa + p->image_memsize, PAGE_16K);
+
+    kprintf("payload %d KB, image -> %x\n", p->total_size >> 10, image_pa);
+    memcpy((void *)image_pa, base + p->image_off, p->image_size);
+    memset((void *)(image_pa + p->image_size), 0, p->image_memsize - p->image_size);
+
+    u64 ramdisk_pa = top;
+    memcpy((void *)ramdisk_pa, base + p->ramdisk_off, p->ramdisk_size);
+    top = ALIGN_UP(top + p->ramdisk_size, PAGE_16K);
+
+    u64 adt_pa = top;
+    memcpy((void *)adt_pa, base + p->adt_off, p->adt_size);
+    top = ALIGN_UP(top + p->adt_size, PAGE_16K);
+
+    struct boot_args *ba = (struct boot_args *)top;
+    top = ALIGN_UP(top + sizeof *ba, PAGE_16K);
+    memset(ba, 0, sizeof *ba);
+    ba->revision = 2;
+    ba->version = 2;
+    ba->virt_base = p->virt_base;
+    ba->phys_base = p->phys_base;
+    ba->mem_size = ba->mem_size_actual = p->mem_size;
+    ba->top_of_kernel_data = top;
+    ba->video.base = FB_BASE;
+    ba->video.row_bytes = FB_W * 4;
+    ba->video.width = FB_W;
+    ba->video.height = FB_H;
+    ba->video.depth = 32;
+    ba->device_tree = (void *)(adt_pa - delta);             /* the kernel wants a virtual address */
+    ba->device_tree_length = (u32)p->adt_size;
+    memcpy(ba->cmdline, p->cmdline, sizeof ba->cmdline);
+
+    u64 entry_pa = p->entry_va + delta;
+    kprintf("entry %x boot_args %x top %x\n", entry_pa, (u64)ba, top);
+    kprintf("args: %s\n", ba->cmdline);
+
+    flush_range(image_pa, top - image_pa);
+    flush_range((u64)_image_start, (u64)_payload - (u64)_image_start + p->total_size);
+    flush_range(0x110000000UL, 4UL << 20);                  /* mem_fill_ms() */
+    jump_kernel(entry_pa, (u64)ba);
+}
+
+static int have_payload(void)
+{
+    static const char magic[] = "LVPAYLD1";
+    for (int i = 0; i < 8; i++)
+        if (_payload[i] != (u8)magic[i])
+            return 0;
+    return 1;
+}
+
 /* ---- entry points ---- */
 
 static volatile u64 gold_alive;
@@ -382,6 +478,9 @@ void gold_main(void)
     kprintf("G clock %d MHz\n", cpu_mhz());
     gold_clock_ladder();
     kprintf("4 MB fill, final:   %d ms\n", mem_fill_ms());
+    if (have_payload())
+        load_payload();
+    kprintf("no payload\n");
     countdown_and_reset();
 }
 

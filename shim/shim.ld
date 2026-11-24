@@ -17,6 +17,8 @@ SECTIONS
     _gold_stack_top = .;
     . += 0x4000;
     _exc_stack_top = .;
-    _image_size = . - _image_start;
+    . = ALIGN(4096);
+    _payload = .;                   /* build.ps1 pads the Image to here and appends the payload */
+    _image_size = . - _image_start; /* build.ps1 adds the payload size in the header */
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.ARM.*) }
 }

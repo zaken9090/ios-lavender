@@ -83,9 +83,26 @@ INTID = SPI number + 32. Values seen live in `/proc/interrupts` match the tree.
 All of them are `no-map` except splash, dfps and pstore. Dynamically placed (no fixed address): venus_fw 8 MB,
 adsp 8 MB, qseecom 20 MB, secure 92 MB, CMA 44 MB. The `memory` node is empty in the file: ABL fills it at boot.
 
-## Open items for E2
+## Measured by the shim (stage E2, 2026-11-24)
 
-1. Memory banks as passed by ABL (read the live DTB from x0).
-2. `fastboot boot` of our own image on this unit.
-3. TGran16 on Silver and Gold; current CPU clock on both clusters.
-4. Framebuffer stride and pixel format at 0x9d400000.
+Read from the phone screen after `fastboot boot` of `shim/` (probe builds v1 and v2).
+
+| Item | Value |
+|---|---|
+| `fastboot boot` | works on this unit with a header v1 image (gzip Image + the one matching DTB) |
+| Entry state | Silver cpu0 (MPIDR 0), EL1, MMU off (SCTLR 0xc00800), image at 0x80080000, DTB pointer in x0 |
+| RAM banks from ABL | 0x80000000 + 0x80000000 and 0x100000000 + 0x7e4c0000 (last value read from a photo, digits 4/1 uncertain) |
+| Panel argument from ABL | `mdss_mdp.panel=1:dsi:0:qcom,mdss_dsi_nt36672a_tianma_fhdplus_video:...` |
+| Framebuffer | 0x9d400000, 1080x2340, 4 bytes per pixel, stride 4320 bytes, x8r8g8b8 (0x00ff0000 is red) |
+| Silver | part 0x801, ID_AA64MMFR0 0x1122: **no 16K granule**, 4K yes, 40-bit PA; runs at 1382 MHz (PLL L=72) |
+| Gold | part 0x800, ID_AA64MMFR0 0x101122: **16K granule present**; started with PSCI CPU_ON(0x100) |
+| Gold clock as left by XBL | 149 MHz (its PLL is locked at L=32 = 614 MHz, but the core is paced by the OSM block) |
+| Gold after OSM clock to 200 MHz | 599 MHz (OSM RCG cfg 0x105 -> 0x102 at 0x179d1130, update at 0x179d112c) |
+| Gold PLL by hand | L=58: 1113 MHz, L=80: 1535, L=96: 1843, L=115: **2207 MHz**; 10/10 checksum runs at each step, no voltage change |
+| 16K MMU on Gold | works: one level-2 table, 32 MB blocks, TCR 0x20080b51c, SCTLR 0xc01805 |
+| 4 MB RAM fill on Gold | 105 ms with MMU/caches off at 149 MHz, 3 ms with caches on, under 1 ms at 2207 MHz |
+| PSCI SYSTEM_RESET | cold reset, the phone boots Android |
+
+Gold clock sequence (register meanings from the Linux `clk-cpu-osm` driver and the first attempt's notes):
+PLL at 0x17816000 (+0 mode, +4 L, rate = L x 19.2 MHz, +0x2c bit 16 = locked); Gold RCG cfg 0x17811054,
+cmd 0x17811050, source 4 = GPLL0, 3 = own PLL. Park on GPLL0, write mode 0, L, mode 2, 6, 7, wait for lock, switch back.
