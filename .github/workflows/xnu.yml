@@ -122,7 +122,8 @@ jobs:
         if: always()
         run: |
           mkdir -p out
-          cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          # only the kernel binary: the link directory next to it is 130 MB of archives
+          find dxb/fakeroot/System/Library/Kernels -maxdepth 1 -type f -name 'kernel.*' -exec cp {} out/ \;
           ls -la out
           (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
 
