@@ -32,7 +32,8 @@ $deadline = (Get-Date).AddMinutes($TimeoutMin)
 $winner = $null
 while (-not $winner -and (Get-Date) -lt $deadline) {
     Start-Sleep 20
-    $state = Get-Runs | Where-Object { $ids -contains $_.databaseId }
+    $state = @(Get-Runs | Where-Object { $ids -contains $_.databaseId })
+    if ($state.Count -lt $ids.Count) { continue }       # the listing came back short: ask again
     $winner = $state | Where-Object { $_.conclusion -eq "success" } | Select-Object -First 1
     if (-not ($state | Where-Object { $_.status -ne "completed" }) -and -not $winner) {
         foreach ($s in $state) { gh run view $s.databaseId -R $Repo --log-failed | Select-String "error:" | Select-Object -First 15 | ForEach-Object { Write-Host $_.Line } }
