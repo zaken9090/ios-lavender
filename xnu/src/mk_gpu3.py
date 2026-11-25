@@ -5,7 +5,8 @@ qcom,skip-init (the secure side has programmed the stream matching), vdd = GPU C
 gcc_gpu_cfg_ahb / bimc_gfx / gpu_bimc_gfx (on since step 2). Context banks: gfx3d_user = SID 0,
 gfx3d_secure = SID 2 (TrustZone's). attach-impl-defs: pairs written by Linux on attach.
 
-lv_gpu=9: read only - sCR0, IDR0-2, GFSR, SMR/S2CR/CBAR/CBA2R 0-7, CB0 SCTLR/FSR.
+lv_gpu=9: read only - sCR0, IDR0-2, GFSR, SMR/S2CR/CBAR/CBA2R of the non-secure entries only (0..NUMSMRG-1;
+reading 3-7 hung the phone), CB0 SCTLR/FSR.
 lv_gpu=10: (attach-impl-defs only with lv_smmu_impl=1: they hung the phone) then CB0 as the base's identity mode (TopazAdreno.cpp
 smmu_setup with gpu_identity: CBA2R AArch64, CBAR S1 translate / S2 bypass, SCTLR 0xE0 = M off,
 i.e. GPU addresses are physical), SMR0/S2CR0 only if the secure side left them unset; GFSR/FSR after.
@@ -33,9 +34,12 @@ lavender_gpu_smmu_dump(volatile uint32_t *m, const char *when)
 	LOG("LVSMMU %s: sCR0 %#x IDR0 %#x IDR1 %#x IDR2 %#x GFSR %#x | CB0 SCTLR %#x FSR %#x TCR %#x",
 	    when, m[0x0 / 4], m[0x20 / 4], m[0x24 / 4], m[0x28 / 4], m[0x48 / 4],
 	    m[0x8000 / 4], m[0x8058 / 4], m[0x8030 / 4]);
-	for (int i = 0; i < 8; i++) {
-		LOG("LVSMMU %s: [%d] SMR %#x S2CR %#x CBAR %#x CBA2R %#x", when, i,
-		    m[(0x800 + 4 * i) / 4], m[(0xc00 + 4 * i) / 4], m[(0x1000 + 4 * i) / 4], m[(0x1800 + 4 * i) / 4]);
+	/* only the non-secure stream-match groups / context banks: IDR0 NUMSMRG (3 here), IDR1 NUMCB (5).
+	 * Reading entries 3-7 (secure side's) hung the phone a little later, twice (2026-11-25). */
+	uint32_t nsmr = m[0x20 / 4] & 0xff, ncb = m[0x24 / 4] & 0xff;
+	for (uint32_t i = 0; i < nsmr && i < 8; i++) {
+		LOG("LVSMMU %s: [%u] SMR %#x S2CR %#x CBAR %#x CBA2R %#x", when, i,
+		    m[(0x800 + 4 * i) / 4], m[(0xc00 + 4 * i) / 4], i < ncb ? m[(0x1000 + 4 * i) / 4] : 0, i < ncb ? m[(0x1800 + 4 * i) / 4] : 0);
 	}
 }
 
