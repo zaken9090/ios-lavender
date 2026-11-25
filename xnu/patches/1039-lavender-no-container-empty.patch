@@ -1,0 +1,24 @@
+lavender: Sandbox container path is an empty string for a process without a container
+
+- topaz_sandbox_container.c: the buffer starts as "" (syncdefaultsd took stack garbage as a path and died)
+- made by xnu/src/mk_nocontainer.py
+
+diff --git a/bsd/kern/topaz_sandbox_container.c b/bsd/kern/topaz_sandbox_container.c
+index 4533ffd..015928e 100644
+--- a/bsd/kern/topaz_sandbox_container.c
++++ b/bsd/kern/topaz_sandbox_container.c
+@@ -46,6 +46,14 @@ sweet_sandbox_container_path(user_addr_t arg)
+ 	if (error) {
+ 		return error;
+ 	}
++	if (args.size != 0) {
++		/* lavender: no container = an empty string, never the caller's old bytes (xnu/src/mk_nocontainer.py) */
++		const char none = 0;
++		error = copyout(&none, args.buffer, 1);
++		if (error) {
++			return error;
++		}
++	}
+ 	p = proc_find((int)args.pid);
+ 	if (p == PROC_NULL) {
+ 		return ESRCH;
