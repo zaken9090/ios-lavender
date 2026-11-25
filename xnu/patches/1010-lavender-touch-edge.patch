@@ -1,0 +1,28 @@
+lavender: touch edge contacts on the 2340-row panel (home gesture from apps)
+
+- SweetHID.cpp: clamp y to 2339 and test the bottom edge against 2339, not the base's 2399;
+  without it no contact carried kIOHIDDigitizerEventFromEdgeTip at the bottom
+- made by xnu/src/mk_edge.py
+
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 0abbc4c..d1cb1a9 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -459,7 +459,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 		return;
+ 	}
+ 	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	y = y < 0 ? 0 : (y > 2339 ? 2339 : y);         /* lavender panel: 2340 rows */
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+@@ -478,7 +478,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 	}
+ 	if (!was && down) {
+ 		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		    y < SWEET_TOUCH_EDGE_PX || y > 2339 - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
