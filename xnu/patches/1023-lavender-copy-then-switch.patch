@@ -1,0 +1,30 @@
+lavender: a copied frame goes on the panel only once it is complete (no console flashes)
+
+- SweetFramebuffer.cpp present(): without flip buffers, compose into the splash while VIG0 still shows the
+  last direct frame, then point VIG0 at the splash
+- made by xnu/src/mk_mdpswitch.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index d0076ac..02aa32f 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1514,9 +1514,7 @@ AppleCLCD::present(const uint8_t *rec)
+ 	 * framebuffer showed every multi-layer frame (dims, apps) drawn top-down.
+ 	 */
+ 	uint8_t *dst = fFlip[0] != NULL ? backBuffer() : (uint8_t *)fPixels;
+-	if (fFlip[0] == NULL && fVig0 != NULL && fScanPhys != fBootSrc) {
+-		scanFrom(fBootSrc, fBootStride);
+-	}
++	/* lavender: VIG0 goes back to the splash only after the frame is composed there (below; mk_mdpswitch.py) */
+ 
+ 
+ 	if (!fConsolePaused) {
+@@ -1615,6 +1613,8 @@ AppleCLCD::present(const uint8_t *rec)
+ 	}
+ 	if (fFlip[0] != NULL) {
+ 		flipBack();
++	} else if (fVig0 != NULL && fScanPhys != fBootSrc) {
++		scanFrom(fBootSrc, fBootStride);        /* lavender: the composed frame, complete */
+ 	}
+ }
+ 
