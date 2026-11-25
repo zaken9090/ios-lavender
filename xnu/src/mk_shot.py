@@ -34,11 +34,11 @@ sub('''		ud.shot_pa = reg[0];
 		    *w, *h, *stride, ud.shot_left);''', '''		ud.shot_pa = reg[0];
 		uint32_t sw = *w, sh = *h, ss = *stride;
 		/* lavender: the MDP may scan a frame of its own (direct frames, patch 1020): send that */
-		uint32_t src = ud_vig0 != NULL ? ud_vig0[0x14 / 4] : 0, size = ud_vig0 != NULL ? ud_vig0[0x00 / 4] : 0;
-		if (src != 0 && src != (uint32_t)reg[0] && (size & 0xffff) != 0 && (size >> 16) != 0) {
+		uint32_t src = ud_vig0 != NULL ? ud_vig0[0x14 / 4] : 0, vsz = ud_vig0 != NULL ? ud_vig0[0x00 / 4] : 0;
+		if (src != 0 && src != (uint32_t)reg[0] && (vsz & 0xffff) != 0 && (vsz >> 16) != 0) {
 			ud.shot_pa = src;
-			sw = size & 0xffff;
-			sh = size >> 16;
+			sw = vsz & 0xffff;
+			sh = vsz >> 16;
 			ss = ud_vig0[0x24 / 4] & 0xffff;
 		}
 		ud.shot_left = (uint64_t)ss * sh;

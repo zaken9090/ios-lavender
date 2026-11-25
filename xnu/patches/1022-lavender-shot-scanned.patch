@@ -5,7 +5,7 @@ lavender: lv:shot sends the frame the MDP scans (direct frames), not the console
 - made by xnu/src/mk_shot.py
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index 6d57601..4bc9f23 100644
+index 6d57601..96abdce 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
 @@ -755,6 +755,8 @@ ud_rx_done(void)
@@ -24,11 +24,11 @@ index 6d57601..4bc9f23 100644
 -		ud.shot_left = (uint64_t)*stride * *h;
 +		uint32_t sw = *w, sh = *h, ss = *stride;
 +		/* lavender: the MDP may scan a frame of its own (direct frames, patch 1020): send that */
-+		uint32_t src = ud_vig0 != NULL ? ud_vig0[0x14 / 4] : 0, size = ud_vig0 != NULL ? ud_vig0[0x00 / 4] : 0;
-+		if (src != 0 && src != (uint32_t)reg[0] && (size & 0xffff) != 0 && (size >> 16) != 0) {
++		uint32_t src = ud_vig0 != NULL ? ud_vig0[0x14 / 4] : 0, vsz = ud_vig0 != NULL ? ud_vig0[0x00 / 4] : 0;
++		if (src != 0 && src != (uint32_t)reg[0] && (vsz & 0xffff) != 0 && (vsz >> 16) != 0) {
 +			ud.shot_pa = src;
-+			sw = size & 0xffff;
-+			sh = size >> 16;
++			sw = vsz & 0xffff;
++			sh = vsz >> 16;
 +			ss = ud_vig0[0x24 / 4] & 0xffff;
 +		}
 +		ud.shot_left = (uint64_t)ss * sh;
