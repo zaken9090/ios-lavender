@@ -49,6 +49,9 @@ jobs:
           python3 userland/gpu/patch_order.py work/gpu/eagl.c
           python3 userland/gpu/patch_sysmem.py work/gpu/eagl.c
           python3 userland/gpu/patch_sum.py work/gpu/eagl.c
+          python3 userland/gpu/patch_tc.py work/gpu/eagl.c
+          # Mesa patches of this repo (threaded context for OSMesa + a5xx fixes), applied with the base's by mk-mesa-mac.sh
+          cp userland/mesa/*.patch work/mesa/
           # lavender installs into existing directories (the kernel writes the files, it makes no
           # directories): libraries in /usr/lib, the real backboardd kept as /usr/sbin/backboardd
           # (same file name: the process stays "backboardd")

@@ -1,0 +1,161 @@
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_context.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_context.c
+@@ -20,6 +20,36 @@
+ #include "fd5_rasterizer.h"
+ #include "fd5_texture.h"
+ #include "fd5_zsa.h"
++
++/*
++ * lavender: drawing straight to memory (FD_MESA_DEBUG=sysmem), what was drawn is in memory once
++ * the colour cache is flushed and the texture cache invalidated - as the batch's own end does
++ * (fd5_emit_sysmem_fini) - so a texture barrier (a draw that reads the framebuffer's texture:
++ * CoreAnimation's framebuffer fetch, emulated) need not end the batch: fd_texture_barrier()
++ * flushed the whole context, a submission each time.
++ */
++static void
++fd5_texture_barrier(struct pipe_context *pctx, unsigned flags) in_dt
++{
++   struct fd_context *ctx = fd_context(pctx);
++
++   if (FD_DBG(SYSMEM)) {
++      struct fd_batch *batch = fd_context_batch(ctx);
++
++      if (!batch->nondraw && batch->draw) {
++         /* as at a batch's ends: colour cache written back, all caches flushed, then invalidated */
++         fd5_event_write(batch, batch->draw, PC_CCU_FLUSH_COLOR_TS, true);
++         OUT_WFI5(batch->draw);
++         fd5_cache_flush(batch, batch->draw);
++         fd5_event_write(batch, batch->draw, PC_CCU_INVALIDATE_COLOR, false);
++         OUT_WFI5(batch->draw);
++         fd_batch_reference(&batch, NULL);
++         return;
++      }
++      fd_batch_reference(&batch, NULL);
++   }
++   pctx->flush(pctx, NULL, 0);   /* (fd_context_flush is static in freedreno_context.c) */
++}
+ 
+ static void
+ fd5_context_destroy(struct pipe_context *pctx) in_dt
+@@ -77,6 +107,8 @@
+    if (!pctx)
+       return NULL;
+ 
++   pctx->texture_barrier = fd5_texture_barrier;
++
+    util_blitter_set_texture_multisample(fd5_ctx->base.blitter, true);
+ 
+    fd5_ctx->vsc_size_mem =
+@@ -92,5 +124,7 @@
+    fd5_ctx->border_color_uploader =
+       u_upload_create(pctx, 4096, 0, PIPE_USAGE_STREAM, 0);
+ 
++   if (debug_get_bool_option("FD_TC", false))
++      return fd_context_init_tc(pctx, flags);
+    return pctx;
+ }
+--- a/src/gallium/frontends/osmesa/osmesa.c
++++ b/src/gallium/frontends/osmesa/osmesa.c
+@@ -1027,3 +1027,38 @@
+       debug_warning("Calling OSMesaPostprocess() after OSMesaMakeCurrent()\n");
+    }
+ }
++
++
++void GLAPIENTRY _mesa_TextureBarrierNV(void);
++GLAPI void GLAPIENTRY OSMesaTextureBarrier(void);
++
++/* lavender: glTextureBarrierNV for the ES context CoreAnimation draws with (libtopaz-gl's emulated framebuffer fetch) */
++GLAPI void GLAPIENTRY
++OSMesaTextureBarrier(void)
++{
++   _mesa_TextureBarrierNV();
++}
++
++
++#include "main/context.h"
++#include "state_tracker/st_cb_flush.h"
++
++GLAPI void GLAPIENTRY OSMesaFlushSync(void);
++
++/*
++ * lavender: glFlush as it was before FD_TC made it asynchronous - everything handed to the driver
++ * (the threaded context's queue run to its end: the kernel has the submissions) without waiting
++ * for the GPU: the end of a frame, before the display is told of it.
++ */
++GLAPI void GLAPIENTRY
++OSMesaFlushSync(void)
++{
++   OSMesaContext osmesa = OSMesaGetCurrentContext();
++
++   if (osmesa != NULL && osmesa->st != NULL) {
++      struct gl_context *ctx = osmesa->st->ctx;
++
++      FLUSH_VERTICES(ctx, 0, 0);
++      st_glFlush(ctx, 0);
++   }
++}
+--- a/src/mesa/main/context.c
++++ b/src/mesa/main/context.c
+@@ -1612,13 +1612,19 @@
+ /** \name Miscellaneous functions                                     */
+ /**********************************************************************/
+ /*@{*/
++#include <stdlib.h>
++
+ /**
+  * Flush commands.
+  */
+ void
+ _mesa_flush(struct gl_context *ctx)
+ {
+-   bool async = !ctx->Shared->HasExternallySharedImages;
++   static int lv_tc = -1;
++
++   if (lv_tc < 0)
++      lv_tc = getenv("FD_TC") != NULL && getenv("FD_TC")[0] == '1';
++   bool async = !ctx->Shared->HasExternallySharedImages || lv_tc;
+    FLUSH_VERTICES(ctx, 0, 0);
+ 
+    st_glFlush(ctx, async ? PIPE_FLUSH_ASYNC : 0);
+--- a/src/gallium/drivers/freedreno/freedreno_context.c
++++ b/src/gallium/drivers/freedreno/freedreno_context.c
+@@ -33,6 +33,12 @@
+ 
+    DBG("%p: %p: flush: flags=%x, fencep=%p", ctx, batch, flags, fencep);
+ 
++   /* lavender: a batch that went out already is no batch to flush - batch_flush() returns at once
++    * for it, and a fence tied to it (threaded context: made beforehand) is never signalled
++    */
++   if (batch && batch->flushed && ctx->tc)
++      fd_batch_reference(&batch, NULL);
++
+    if (fencep && !batch) {
+       batch = fd_context_batch(ctx);
+    } else if (!batch) {
+@@ -53,6 +59,12 @@
+       assert(!(flags & PIPE_FLUSH_FENCE_FD));
+ 
+       fd_pipe_fence_set_batch(*fencep, batch);
++      /* lavender: the fence the batch was made with (gen < 6: fd_batch_create) holds a reference
++       * to the batch that its destruction never drops - let go of it before it is replaced, or
++       * every async flush leaks its batch (the 32-batch cache fills: a spin in alloc_batch_locked)
++       */
++      if (batch->fence && batch->fence != *fencep)
++         fd_pipe_fence_set_batch(batch->fence, NULL);
+       fd_pipe_fence_ref(&batch->fence, *fencep);
+ 
+       /* If we have nothing to flush, update the pre-created unflushed
+--- a/src/gallium/drivers/freedreno/freedreno_batch.c
++++ b/src/gallium/drivers/freedreno/freedreno_batch.c
+@@ -450,6 +450,10 @@
+    assert(batch->ctx == dep->ctx);
+ 
+    if (fd_batch_has_dep(batch, dep))
++      return;
++
++   /* lavender: what went out already need not go out first */
++   if (dep->flushed)
+       return;
+ 
+    /* a loop should not be possible */
