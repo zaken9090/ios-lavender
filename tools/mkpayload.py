@@ -125,9 +125,11 @@ FW_ZAPMEM = 0x10000
 
 
 USERLAND_FILES = ("libOSMesa.8.dylib", "libtopaz-gl.dylib", "libtopaz-inject.dylib", "backboardd")
+# files for the iOS root the kernel writes in place (patch 1035), kept out of the repo (Apple's, changed)
+ROOT_FILES = ("launchd.plist",)
 
 
-def fw_archive(folder, userland=None):
+def fw_archive(folder, userland=None, rootfiles=None):
     """GPU firmware for the kernel, kept out of the repo and the CI kernel (proprietary).
 
     The shim copies the ramdisk slot right after the kernel image, inside the kernel's static
@@ -140,6 +142,8 @@ def fw_archive(folder, userland=None):
     files = [(n, (Path(folder) / n).read_bytes()) for n in FW_FILES if (Path(folder) / n).exists()]
     if userland:   # the GPU user space from the userland CI: the kernel installs it (patch 1015)
         files += [(n, (Path(userland) / n).read_bytes()) for n in USERLAND_FILES if (Path(userland) / n).exists()]
+    if rootfiles:  # e.g. launchd.plist with the CommCenter jobs back: the kernel writes it over the root's (backup kept)
+        files += [(n, (Path(rootfiles) / n).read_bytes()) for n in ROOT_FILES if (Path(rootfiles) / n).exists()]
     off = 0x1000
     table, blobs = b"", b""
     for name, data in files:
@@ -167,6 +171,7 @@ def main():
     ap.add_argument("--cmdline", default="")
     ap.add_argument("--fw", help="folder of GPU firmware: packed into the ramdisk slot (see fw_archive)")
     ap.add_argument("--userland", help="with --fw: folder of the userland CI's files, added to the archive")
+    ap.add_argument("--rootfiles", help="with --fw: folder of files for the iOS root (launchd.plist), added to the archive")
     a = ap.parse_args()
 
     if a.kernel:
@@ -189,7 +194,7 @@ def main():
     if a.fw:
         if ramdisk:
             ap.error("--fw and --ramdisk both use the ramdisk slot")
-        ramdisk = fw_archive(a.fw, a.userland)
+        ramdisk = fw_archive(a.fw, a.userland, a.rootfiles)
         virt_base = image_va & ~(BLOCK_32M - 1)
         ramdisk_pa = (image_va - virt_base + phys_base + memsize + PAGE_16K - 1) & ~(PAGE_16K - 1)
         cmdline += f" lv_fwpa=0x{ramdisk_pa:x}".encode()

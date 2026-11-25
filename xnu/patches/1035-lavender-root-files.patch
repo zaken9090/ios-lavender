@@ -1,0 +1,45 @@
+lavender: the kernel writes root files from the payload (launchd.plist), keeping the old one as .lv-orig
+
+- topaz_fw.c lavender_userland_install(): archive entry launchd.plist -> /System/Library/xpc/launchd.plist;
+  boot-arg lv_rootrestore=1 puts the kept file back
+- made by xnu/src/mk_rootfiles.py
+
+diff --git a/bsd/dev/topaz_fw.c b/bsd/dev/topaz_fw.c
+index 0c2958d..654dd9d 100644
+--- a/bsd/dev/topaz_fw.c
++++ b/bsd/dev/topaz_fw.c
+@@ -181,6 +181,34 @@ lavender_userland_install(void)
+ 			changed += lv_write(path, d, size) == 0;
+ 		}
+ 	}
++	/* lavender: root files from the payload, the old one kept once as <path>.lv-orig (xnu/src/mk_rootfiles.py) */
++	static const struct { const char *name, *path; } rootf[] = {
++		{ "launchd.plist", "/System/Library/xpc/launchd.plist" },
++	};
++	uint32_t restore = 0;
++	PE_parse_boot_argn("lv_rootrestore", &restore, sizeof(restore));
++	for (unsigned i = 0; i < sizeof(rootf) / sizeof(rootf[0]); i++) {
++		char kept[96];
++		snprintf(kept, sizeof(kept), "%s.lv-orig", rootf[i].path);
++		if (restore) {
++			if (lv_exists(kept)) {
++				printf("LVINSTALL restore %s -> %d\n", rootf[i].path, lv_copy(kept, rootf[i].path));
++			}
++			continue;
++		}
++		const uint8_t *d = lavender_fw(rootf[i].name, &size);
++		if (d == NULL || lv_same(rootf[i].path, d, size)) {
++			continue;
++		}
++		if (!lv_exists(kept)) {
++			int err = lv_copy(rootf[i].path, kept);
++			printf("LVINSTALL keep %s as %s -> %d\n", rootf[i].path, kept, err);
++			if (err) {
++				continue;
++			}
++		}
++		changed += lv_write(rootf[i].path, d, size) == 0;
++	}
+ 	const uint8_t *wrap = lavender_fw("backboardd", &size);
+ 	if (wrap != NULL) {
+ 		if (!lv_exists(real)) {

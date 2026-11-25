@@ -25,8 +25,10 @@ function To-Fastboot {
     foreach ($i in 1..30) { Start-Sleep 1; if (& ..\platform-tools\fastboot.exe devices) { return } }
 }
 
+# files for the iOS root (kept out of the repo): written by the kernel when present (patch 1035)
+$rootArgs = @(); if (Test-Path ..\downloadsoot-files) { $rootArgs = @("--rootfiles", (Resolve-Path ..\downloadsoot-files).Path) }
 $cmdline = ((Get-Content shim\out\e7-bootargs.txt) + " gpu=1 glfetch=0 " + $Extra).Trim()
-python tools\mkpayload.py "shim\out\payload-$Tag.bin" --kernel $k --adt shim\out\lavender.adt --cmdline $cmdline --fw (Resolve-Path ..\downloads\gpu-fw).Path --userland (Resolve-Path $Userland).Path | Out-Null
+python tools\mkpayload.py "shim\out\payload-$Tag.bin" --kernel $k --adt shim\out\lavender.adt --cmdline $cmdline --fw (Resolve-Path ..\downloads\gpu-fw).Path --userland (Resolve-Path $Userland).Path @rootArgs | Out-Null
 powershell -ExecutionPolicy Bypass -File shim\build.ps1 -Dtb ..\dump\miui-boot\split\dtb5.dtb -Payload "shim\out\payload-$Tag.bin" -Out "shim\out\$Tag.img" | Out-Null
 To-Fastboot
 if ($Install) {
