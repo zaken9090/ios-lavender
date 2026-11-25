@@ -1,0 +1,30 @@
+# GPU plan: Adreno 512 (a5xx) on lavender, after ios-topaz's Adreno 610 path
+
+Base path (ios-topaz e4772911, patches 0900-0950): TopazAdreno.cpp (power, zap, SMMU, CP, ring;
+polled fences) + RedwoodGPU.cpp (msm-DRM-like ioctls over IOConnect) in the kernel; userland
+Mesa 25.0.7 freedreno + OSMesa (redwood-drm instead of libdrm), libtopaz-gl (eagl.c: EAGLContext
+for CoreAnimation), injected into backboardd (bbd_wrap / kern.exec_inject). Boot-arg `gpu=1`.
+The base builds the userland **locally on a Mac** — there is no workflow; we need our own CI job.
+
+## What changes for A512
+| | A610 (base) | A512 (lavender) | mainline reference |
+|---|---|---|---|
+| GPU / GPUCC / SMMU / GCC | 0x05900000 / 0x05990000 / 0x059A0000 / 0x01400000 | 0x05000000 / 0x05065000 / 0x05040000 / 0x00100000 | gpucc-sdm660.c, gcc-sdm660.c |
+| GDSCs | CX 0x106c, GX 0x100c, GMU clocks | CX 0x1004, GX 0x1094, no GMU | gpucc-sdm660.c |
+| gfx3d | RCG 0x101c, branch 0x1054 | RCG 0x1070 (GPLL0 src 5), branch 0x1098 | gpucc-sdm660.c |
+| CP microcode | one SQE (a630_sqe) | PM4 + PFP (a530_pm4.fw, a530_pfp.fw) | a5xx_ucode_load, a5xx_hw_init, a5xx_me_init |
+| HW init | a612_hwcg, a6xx UCHE | a5xx_hw_init (VBIF, UCHE, GMEM, protect), a512_hwcg | a5xx_gpu.c |
+| zap | PAS 13, region 0x55B15000 | PAS 13, lavender region from DT, a512_zap.mdt/.bNN (device-signed) | a5xx_zap_shader_init |
+| ids for Mesa | 610 / 0x06010001 / GMEM 0x21000 | 512 / 0x05010200 / 0x44000 | a5xx catalog |
+| userland | framebuffer fetch on | `glfetch=0` (fd5 has no FBFETCH) | — |
+
+## Steps (each with a kernel-log signal)
+1. Addresses + power (GCC branches, CX/GX GDSC, gfx3d from GPLL0) → GDSC on, RBBM_STATUS sane.
+2. Chip id → 0x05010200.
+3. Zap (PAS 13) → init_image / mem_setup / auth_reset = 0.
+4. SMMU pass-through (gpu_identity=1) → GFSR 0.
+5. PM4/PFP, a5xx_hw_init, ring, ME_INIT → "CP up".
+6. Self-test CACHE_FLUSH_TS → fence value in memory.
+7. Ids 512 / 0x05010200 / 0x44000 → RedwoodGPU published.
+8. Userland CI (macOS runner: Mesa freedreno + OSMesa, redwood-drm, libtopaz-gl, inject) → into the root → UI drawn by the GPU, bench.
+9. Later: SMMU translation, interrupts, GPU clock 600+ MHz (GX voltage vote), render straight into display surfaces.
