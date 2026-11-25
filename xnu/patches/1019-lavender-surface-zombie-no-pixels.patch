@@ -1,0 +1,23 @@
+lavender: a released IOSurface view keeps only its state page, not the surface (1.2 GB of zombie pixels)
+
+- SweetSurface.cpp trapRelease: the zombie view releases its surface at once; its state page mapping stays
+- made by xnu/src/mk_zombie.py
+
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 552583d..49a5ea3 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -1752,6 +1752,13 @@ IOSurfaceRootUserClient::trapRelease(void *id, void *, void *, void *, void *, v
+ 		 */
+ 		OSSafeReleaseNULL(ref->data);
+ 		sweet_surface_put(ref->surface);
++		/*
++		 * lavender: the zombie keeps the state page's mapping only (it retains that page's
++		 * descriptor itself), not the surface: with it, every zombie kept its whole pixel
++		 * buffer wired (1.2 GB on lavender; xnu/src/mk_zombie.py).
++		 */
++		ref->surface->release();
++		ref->surface = NULL;
+ 		ref->released = true;
+ 		ref->detached = false;
+ 		if (fZombies != NULL && fZombies->setObject(ref)) {
