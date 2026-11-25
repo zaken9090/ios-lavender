@@ -120,6 +120,21 @@ lavender_gpu_probe(uint32_t level)
 	if (level < 5) {
 		return;
 	}
+	/*
+	 * The GX rail: DT gfx_corner (cpr4 mmss-ldo) has a stub vdd; the real rail is PM660L S3, voted
+	 * by level over RPM (system-supply pm660l_s3_level: resource "smpb" 3, keys "swen" / "vlvl").
+	 * Levels per gfx corner 0x40 0x40 0x80 0xc0 0x100 0x140 0x180; 300 MHz = corner 3 = 0x80 (SVS).
+	 * Without it the GX GDSC never reports PWR_ON and unclamping it stops the display (and touch).
+	 */
+	uint32_t lvl = 0x80;
+	PE_parse_boot_argn("lv_gfx_lvl", &lvl, sizeof(lvl));
+	if (lvl) {
+		bool en = topaz_rpm_write(0, 0x62706d73u /* smpb */, 3, 0x6e657773u /* swen */, 1);
+		bool lv = topaz_rpm_write(0, 0x62706d73u, 3, 0x6c766c76u /* vlvl */, lvl);
+		LOG("LVGPU GX rail smpb3 swen %s vlvl %#x %s", en ? "acked" : "FAILED", lvl, lv ? "acked" : "FAILED");
+		IODelay(2000);
+	}
+
 	/* GX: reset pulse, power, AON reset pulse, unclamp, then its clock */
 	lv_w(lv_gpucc, 0x1090, 1);
 	IODelay(10);
