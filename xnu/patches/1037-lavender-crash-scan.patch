@@ -1,0 +1,48 @@
+lavender: abort crash report lists main-binary addresses left on the stack
+
+- exception.c sweet_crash_log(): "CRASH name scan" for signals 6/5 (who threw an uncaught exception)
+- made by xnu/src/mk_crashscan.py
+
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 08f9612..eacce33 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -895,6 +895,38 @@ sweet_crash_log(const char *name, int pid, int sig, uint64_t code, uint64_t subc
+ 	}
+ 	if (sig == 6 || sig == 5) {
+ 		sweet_crash_strings(name);
++		/* lavender: main-binary addresses left on the stack (xnu/src/mk_crashscan.py) */
++		uint64_t sp = get_saved_state_sp(ss) & ~7ull, seen[28];
++		int found = 0;
++		n = snprintf(line, sizeof(line), "CRASH %s scan", name);
++		for (uint64_t at = sp - (16u << 10); at < sp + 1024 && found < 28; at += 8) {
++			uint64_t word;
++			bool again = false;
++			if (copyin((user_addr_t)at, &word, sizeof(word)) != 0) {
++				at |= PAGE_MASK - 7;            /* (on to the next page) */
++				continue;
++			}
++			if (word < mh + 0x4000 || word >= mh + (32u << 20) || (word & 3) != 0) {
++				continue;
++			}
++			for (int i = 0; i < found; i++) {
++				again |= seen[i] == word;
++			}
++			if (again) {
++				continue;
++			}
++			seen[found++] = word;
++			if (n > (int)sizeof(line) - 20) {
++				printf("%s
++", line);
++				n = snprintf(line, sizeof(line), "CRASH %s scan", name);
++			}
++			n += snprintf(line + n, sizeof(line) - n, " 0x%llx", word);
++		}
++		if (found != 0) {
++			printf("%s
++", line);
++		}
+ 	}
+ }
+ 
