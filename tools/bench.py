@@ -156,21 +156,29 @@ def main():
         def wake():
             for _ in range(2):
                 m = rd.mark()
-                cmd(phone, "lv:power", 2.0)
-                got = rd.since(m)
+                cmd(phone, "lv:power", 0.5)
+                got = b""
+                for _ in range(12):     # iOS answers within ~2-3 s: "display on" or "display off"
+                    got = rd.since(m)
+                    if b"display on" in got or b"display off" in got:
+                        break
+                    time.sleep(0.5)
                 if b"display on" in got:
+                    time.sleep(1.5)
                     return
                 if b"display off" not in got:
-                    return              # nothing logged: assume it was a wake that needed none
-        wake()
-        for attempt in range(4):
+                    return              # nothing logged in 6 s: leave it
+        # iOS turns an idle lock screen off within ~10 s, and a stale framebuffer still looks like
+        # home: each try wakes the display, swipes at once, and counts only a home screen that new
+        # frames were drawn for.
+        for attempt in range(3):
+            wake()
+            m = rd.mark()
+            cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
             shot = screenshot(phone, rd, None)
-            if shot and is_home(shot):
+            if b"SWEET FPS" in rd.since(m) and shot and is_home(shot):
                 home = True
                 break
-            if attempt == 2:
-                wake()
-            cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
         screenshot(phone, rd, f"bench_{a.tag}_{stamp}_home.png")
         if not home:
             print("bench: NOT UNLOCKED (see the screenshot)", file=sys.stderr)
