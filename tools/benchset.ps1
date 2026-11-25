@@ -6,13 +6,14 @@ param(
     [Parameter(Mandatory)][string]$Prefix,
     [Parameter(Mandatory)][string]$Sets,
     [string]$Fw,
+    [string]$Userland,          # with -Fw: the userland CI's files for the kernel to install (patch 1015)
     [int]$Settle = 30
 )
 $ErrorActionPreference = "Continue"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $k = (Get-ChildItem $Kernel -Recurse -Filter "kernel.*" | Select-Object -First 1).FullName
-$fwArgs = @(); if ($Fw) { $fwArgs = @("--fw", (Resolve-Path $Fw).Path) }
+$fwArgs = @(); if ($Fw) { $fwArgs = @("--fw", (Resolve-Path $Fw).Path) }; if ($Fw -and $Userland) { $fwArgs += @("--userland", (Resolve-Path $Userland).Path) }
 $i = 0
 foreach ($set in ($Sets -split ";")) {
     $tag = "$Prefix-$i"; $i++

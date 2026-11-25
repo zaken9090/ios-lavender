@@ -39,19 +39,24 @@ def sub(old, new):
     s = s.replace(old, new)
 
 
-# ---- TopazRpm.cpp: lavender_fw maps the whole archive (the userland is ~15 MB)
+# ---- TopazRpm.cpp: the archive (~15 MB with the userland) is read through the kernel's own view of
+# its static memory (phystokv), not mapped: two IO-space mappings of it ran the kernel out of space
+# (panic "kmem_alloc ... failed with 3" while launchd mapped the shared cache, 2026-11-25).
 load('iokit/Kernel/arm/TopazRpm.cpp')
+sub('''/* write-combined (Normal non-cacheable): the ELF fields are read with plain, possibly unaligned loads */''',
+    '''/* write-combined (Normal non-cacheable): the ELF fields are read with plain, possibly unaligned loads */
+extern "C" vm_offset_t phystokv(uint64_t pa);     /* the archive is in the kernel's static memory */''')
+sub('''	const volatile uint8_t *ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x4000);''',
+    '''	const volatile uint8_t *ar = (const volatile uint8_t *)phystokv(fwpa);''')
+sub('''	ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, (total + 0x3fff) & ~0x3fffu);''',
+    '''	ar = (const volatile uint8_t *)phystokv(fwpa);''')
 sub('''		ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x40000);
 		if (ar == NULL || memcmp((const void *)ar, "LVFW0001", 8) != 0) {
 			ar = NULL;
 			return NULL;
-		}''', '''		const volatile uint8_t *head = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x4000);
-		if (head == NULL || memcmp((const void *)head, "LVFW0001", 8) != 0) {
-			return NULL;
-		}
-		uint32_t total = *(const volatile uint32_t *)(head + 12) + *(const volatile uint32_t *)(head + 16);
-		ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, (total + 0x3fff) & ~0x3fffu);
-		if (ar == NULL) {
+		}''', '''		ar = (const volatile uint8_t *)phystokv(fwpa);
+		if (memcmp((const void *)ar, "LVFW0001", 8) != 0) {
+			ar = NULL;
 			return NULL;
 		}''')
 save()

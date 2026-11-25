@@ -2,7 +2,7 @@ lavender: the kernel installs the GPU user space from the payload (boot-arg gpu=
 
 - topaz_fw.c: lavender_userland_install(): /usr/lib/libOSMesa.8.dylib, libtopaz-gl, libtopaz-inject and the
   backboardd wrapper (real one kept as /usr/sbin/backboardd); only changed files, unlink + create; lv_uninstall=1
-- TopazRpm.cpp: lavender_fw maps the whole archive; TopazAdreno.cpp: install before the GPU starts
+- TopazRpm.cpp: the archive read via phystokv (no IO mappings); TopazAdreno.cpp: install before the GPU starts
 - made by xnu/src/mk_install.py
 
 diff --git a/bsd/dev/topaz_fw.c b/bsd/dev/topaz_fw.c
@@ -165,23 +165,42 @@ index 671a4a3..016898f 100644
  	bool ok = hw_start();
  	IOLockUnlock(hw_lock);
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index 8c82ac3..7817996 100644
+index 8c82ac3..9a45bbf 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
-@@ -1088,9 +1088,13 @@ lavender_fw(const char *name, uint32_t *size)
+@@ -539,6 +539,7 @@ lavender_gpu_probe(uint32_t level)
+ 
+ /* lavender GPU step 3 (lv_gpu=8): zap shader via PAS 13. See xnu/src/mk_gpu2.py. */
+ /* write-combined (Normal non-cacheable): the ELF fields are read with plain, possibly unaligned loads */
++extern "C" vm_offset_t phystokv(uint64_t pa);     /* the archive is in the kernel's static memory */
+ extern "C" vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
+ static uint64_t
+ lv_smc(uint64_t a[8])
+@@ -595,14 +596,14 @@ lavender_gpu_zap(void)
+ 		LOG("LVZAP no firmware (lv_fwpa missing: mkpayload --fw)");
+ 		return;
+ 	}
+-	const volatile uint8_t *ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x4000);
++	const volatile uint8_t *ar = (const volatile uint8_t *)phystokv(fwpa);
+ 	if (ar == NULL || memcmp((const void *)ar, "LVFW0001", 8) != 0) {
+ 		LOG("LVZAP bad archive at %#llx", fwpa);
+ 		return;
+ 	}
+ 	uint32_t zone_off = *(const volatile uint32_t *)(ar + 12), zone_size = *(const volatile uint32_t *)(ar + 16);
+ 	uint32_t total = zone_off + zone_size;
+-	ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, (total + 0x3fff) & ~0x3fffu);
++	ar = (const volatile uint8_t *)phystokv(fwpa);
+ 	if (ar == NULL) {
+ 		LOG("LVZAP map failed");
+ 		return;
+@@ -1088,8 +1089,8 @@ lavender_fw(const char *name, uint32_t *size)
  		if (!PE_parse_boot_argn("lv_fwpa", &fwpa, sizeof(fwpa)) || fwpa == 0) {
  			return NULL;
  		}
 -		ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x40000);
 -		if (ar == NULL || memcmp((const void *)ar, "LVFW0001", 8) != 0) {
--			ar = NULL;
-+		const volatile uint8_t *head = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x4000);
-+		if (head == NULL || memcmp((const void *)head, "LVFW0001", 8) != 0) {
-+			return NULL;
-+		}
-+		uint32_t total = *(const volatile uint32_t *)(head + 12) + *(const volatile uint32_t *)(head + 16);
-+		ar = (const volatile uint8_t *)ml_io_map_wcomb(fwpa, (total + 0x3fff) & ~0x3fffu);
-+		if (ar == NULL) {
++		ar = (const volatile uint8_t *)phystokv(fwpa);
++		if (memcmp((const void *)ar, "LVFW0001", 8) != 0) {
+ 			ar = NULL;
  			return NULL;
  		}
- 	}
