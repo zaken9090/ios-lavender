@@ -1,0 +1,33 @@
+lavender: SWEET FPS line - frame gaps by panel periods (1/2/3/more)
+
+- SweetFramebuffer.cpp sweet_fps_count: a small histogram of gaps between frames
+- made by xnu/src/mk_gaps.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 057cceb..844f9bb 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -902,6 +902,8 @@ sweet_fps_count(void)
+ 	}
+ 	frames++;
+ 	late += gap > 20000000ull;
++	static uint32_t lv_gaps[4];             /* lavender: gaps of 1, 2, 3, more panel periods (mk_gaps.py) */
++	lv_gaps[gap <= 20000000ull ? 0 : gap <= 37000000ull ? 1 : gap <= 54000000ull ? 2 : 3]++;
+ 	if (sweet_fps_tick != 0 && now > sweet_fps_tick) {
+ 		uint64_t after = 0;
+ 		absolutetime_to_nanoseconds(now - sweet_fps_tick, &after);
+@@ -913,10 +915,12 @@ sweet_fps_count(void)
+ 		uint64_t gpu_ns = 0;
+ 		absolutetime_to_nanoseconds(lv_fps_gpu_abs, &gpu_ns);
+ 		IOLog("SWEET FPS: %u frames in %llu ms, longest gap %llu ms, %u late; a frame: %llu us in present + latch, "
+-		    "came %llu us after the tick; direct %u copied %u, GPU waited %llu us a frame\n", frames, ns / 1000000,
++		    "came %llu us after the tick; direct %u copied %u, GPU waited %llu us a frame; gaps %u/%u/%u/%u\n", frames, ns / 1000000,
+ 		    gap_max / 1000000, late,
+ 		    frames ? sweet_fps_wait_ns / 1000 / frames : 0, frames ? sweet_fps_after_ns / 1000 / frames : 0,
+-		    lv_fps_direct, lv_fps_copied, lv_fps_direct ? gpu_ns / 1000 / lv_fps_direct : 0);
++		    lv_fps_direct, lv_fps_copied, lv_fps_direct ? gpu_ns / 1000 / lv_fps_direct : 0,
++		    lv_gaps[0], lv_gaps[1], lv_gaps[2], lv_gaps[3]);
++		lv_gaps[0] = lv_gaps[1] = lv_gaps[2] = lv_gaps[3] = 0;
+ 		lv_fps_direct = lv_fps_copied = 0;
+ 		lv_fps_gpu_abs = 0;
+ 		sweet_fps_wait_ns = sweet_fps_after_ns = 0;
