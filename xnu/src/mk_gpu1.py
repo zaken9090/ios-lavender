@@ -16,7 +16,8 @@ off (it is a CPR regulator, not voted yet).
 
 Stages (lv_gpu=N, to find what disturbs the panel's touch, seen 2026-11-25: with the full probe the
 NT36672A reports no fingers): 1 map + log, 2 GCC branches + gpucc cxo, 3 + CX GDSC, 4 + gfx3d RCG,
-5 + GX GDSC / clamp / gfx3d branch, 6 + GPU register reads.
+5 + GX reset and GX GDSC, 6 + clamp / AON reset / gfx3d and rbbmtimer branches, 7 + GPU register reads.
+Stages 1-4 leave touch working; the full probe stops it (likely the display pipeline, touch is the same chip).
 
 usage: python mk_gpu1.py XNU_TREE
 """
@@ -124,6 +125,10 @@ lavender_gpu_probe(uint32_t level)
 	IODelay(10);
 	lv_w(lv_gpucc, 0x1090, 0);
 	ok &= lv_gdsc_on(0x1094, "GX");
+	if (level < 6) {
+		LOG("LVGPU stage 5 (GX reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
+		return;
+	}
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) | (1u << 4));
 	IODelay(1);
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~(1u << 4));
@@ -132,7 +137,7 @@ lavender_gpu_probe(uint32_t level)
 	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
 	LOG("LVGPU power %s: cx %#x gx %#x clamp %#x gfx3d %#x", ok ? "ok" : "INCOMPLETE",
 	    lv_r(lv_gpucc, 0x1004), lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130), lv_r(lv_gpucc, 0x1098));
-	if (!ok || level < 6) {
+	if (!ok || level < 7) {
 		return;
 	}
 
