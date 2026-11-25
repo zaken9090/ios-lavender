@@ -1,0 +1,27 @@
+lavender: boot-arg sweetfb_lock_us - vsync tick offset after the panel frame start (sweetfb_lock=1)
+
+- SweetFramebuffer.cpp vsyncNext(): offset from the boot-arg, default 300 us
+- made by xnu/src/mk_lockus.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 844f9bb..45d8ad5 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -754,7 +754,16 @@ AppleCLCD::vsyncNext(void)
+ 		line = 0;
+ 	}
+ 	uint32_t left = (uint32_t)((uint64_t)(fVTotal - line) * fPanelUS / fVTotal);
+-	uint32_t next = left + 300;
++	/* lavender: sweetfb_lock_us - the tick this long after the panel's frame starts (xnu/src/mk_lockus.py) */
++	static uint32_t lock_us;
++	if (lock_us == 0) {
++		lock_us = 300;
++		PE_parse_boot_argn("sweetfb_lock_us", &lock_us, sizeof(lock_us));
++		if (lock_us == 0 || lock_us > 12000) {
++			lock_us = 300;
++		}
++	}
++	uint32_t next = left + lock_us;
+ 	while (next < 12000) {
+ 		next += fPanelUS;
+ 	}
