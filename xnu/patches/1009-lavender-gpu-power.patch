@@ -7,10 +7,10 @@ lavender: GPU step 1-2, Adreno 512 power-up probe (lv_gpu=1)
 - made by xnu/src/mk_gpu1.py
 
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index 0f88341..cb9c829 100644
+index 0f88341..61bc556 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
-@@ -376,6 +376,163 @@ lavender_memcpy_speed(const char *when)
+@@ -376,6 +376,167 @@ lavender_memcpy_speed(const char *when)
  	}
  }
  
@@ -146,7 +146,7 @@ index 0f88341..cb9c829 100644
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) | (1u << 4));
 +	IODelay(1);
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~(1u << 4));
-+	ok &= lv_gdsc_on(0x1094, "GX");
++	(void)lv_gdsc_on(0x1094, "GX");      /* on lavender PWR_ON shows only after the unclamp below */
 +	if (level < 6) {
 +		LOG("LVGPU stage 5 (GX reset + AON reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
 +		return;
@@ -155,6 +155,10 @@ index 0f88341..cb9c829 100644
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~1u);
 +	ok &= lv_branch(lv_gpucc, 0x1098, "gfx3d");
 +	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
++	for (int i = 0; i < 1000 && !(lv_r(lv_gpucc, 0x1094) & 0x80000000u); i++) {
++		IODelay(10);
++	}
++	ok &= (lv_r(lv_gpucc, 0x1094) & 0x80000000u) != 0;
 +	LOG("LVGPU power %s: cx %#x gx %#x clamp %#x gfx3d %#x", ok ? "ok" : "INCOMPLETE",
 +	    lv_r(lv_gpucc, 0x1004), lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130), lv_r(lv_gpucc, 0x1098));
 +	if (!ok || level < 7) {
@@ -174,7 +178,7 @@ index 0f88341..cb9c829 100644
  static void
  lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
  {
-@@ -389,6 +546,11 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -389,6 +550,11 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
  		IOSleep(100);
  		lavender_memcpy_speed("after");
  	}

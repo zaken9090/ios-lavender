@@ -167,7 +167,7 @@ lavender_gpu_probe(uint32_t level)
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) | (1u << 4));
 	IODelay(1);
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~(1u << 4));
-	ok &= lv_gdsc_on(0x1094, "GX");
+	(void)lv_gdsc_on(0x1094, "GX");      /* on lavender PWR_ON shows only after the unclamp below */
 	if (level < 6) {
 		LOG("LVGPU stage 5 (GX reset + AON reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
 		return;
@@ -176,6 +176,10 @@ lavender_gpu_probe(uint32_t level)
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~1u);
 	ok &= lv_branch(lv_gpucc, 0x1098, "gfx3d");
 	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
+	for (int i = 0; i < 1000 && !(lv_r(lv_gpucc, 0x1094) & 0x80000000u); i++) {
+		IODelay(10);
+	}
+	ok &= (lv_r(lv_gpucc, 0x1094) & 0x80000000u) != 0;
 	LOG("LVGPU power %s: cx %#x gx %#x clamp %#x gfx3d %#x", ok ? "ok" : "INCOMPLETE",
 	    lv_r(lv_gpucc, 0x1004), lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130), lv_r(lv_gpucc, 0x1098));
 	if (!ok || level < 7) {
