@@ -54,10 +54,30 @@ rtc_read32(uint32_t *out)
 	return -1;
 }
 
+/*
+ * "lv:time" can arrive before the calendar exists (the host sends it as soon as USB is up), when
+ * clock_set_calendar_microtime() must not run yet (it hung the boot): keep it with its arrival
+ * time and hand it out here, where the calendar is initialized from, writing it to the RTC too.
+ */
+static uint64_t rtc_host_secs, rtc_host_abs;
+static volatile bool rtc_calendar_ready;
+
+int sweet_rtc_set(uint32_t secs);
+
 int
 sweet_rtc_get(uint32_t *secs)
 {
 	uint8_t ctrl = 0;
+	if (rtc_host_secs != 0 && !rtc_calendar_ready) {
+		uint64_t ns;
+		absolutetime_to_nanoseconds(mach_absolute_time() - rtc_host_abs, &ns);
+		*secs = (uint32_t)(rtc_host_secs + ns / NSEC_PER_SEC);
+		rtc_calendar_ready = true;
+		printf("SWEET RTC: calendar from the host: %u\n", *secs);
+		(void)sweet_rtc_set(*secs);
+		return 0;
+	}
+	rtc_calendar_ready = true;
 	int r = spmi_byte(false, RTC_CTRL, &ctrl);
 	if (r == 0) {
 		r = rtc_read32(secs);
@@ -109,12 +129,39 @@ ud_set_time(const char *arg)
 		printf("LV USB: lv:time: bad value\n");
 		return;
 	}
+	if (!rtc_calendar_ready) {
+		rtc_host_abs = mach_absolute_time();
+		rtc_host_secs = secs;
+		printf("LV USB: host time %llu kept until the calendar starts\n", secs);
+		return;
+	}
 	printf("LV USB: calendar set to %llu by the host\n", secs);
 	clock_set_calendar_microtime((clock_sec_t)secs, 0);
 }
 '''
 
 edit('bsd/dev/sweet_usb.c', [
+    # writes only through channels the application processor owns (an RTC owned by the secure
+    # side must not be written at all)
+    ('''static int
+spmi_channel(unsigned peripheral)
+{''', '''static vm_offset_t spmi_cnfg_map;
+
+static int
+spmi_channel(unsigned peripheral)
+{'''),
+    ('''	if (core == 0 || cnfg == 0) {
+		return -1;
+	}''', '''	if (core == 0 || cnfg == 0) {
+		return -1;
+	}
+	spmi_cnfg_map = cnfg;'''),
+    ('''	if (write) {
+		*(volatile uint32_t *)(ch + SPMI_WDATA) = *val;''', '''	if (write && (usb_rd(spmi_cnfg_map, 0x700 + 4 * (unsigned)channel) & 7) != 0) {
+		return -4;              /* channel not ours */
+	}
+	if (write) {
+		*(volatile uint32_t *)(ch + SPMI_WDATA) = *val;'''),
     # one mapping per channel, not one per access
     ('''	vm_offset_t ch = ml_io_map((write ? SPMI_CHNLS_PA : SPMI_OBSRVR_PA) + 0x8000u * (uint32_t)channel, 0x1000);
 	if (ch == 0) {

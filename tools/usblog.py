@@ -11,6 +11,7 @@ usage: usblog.py [--out FILE] [--wait SECONDS] [--idle SECONDS] [--until TEXT] [
   --until TEXT   stop when TEXT appears in the log
   --cmd TEXT     send a command (lv:ping, lv:reset, lv:fastboot) once connected; with --idle 0 exit right after
   --shot FILE    save what the panel shows as a PNG (lv:shot) and exit
+  --time         set the phone's clock from this PC once connected (lv:time SECS, xnu patch 1006)
 """
 import argparse
 import ctypes
@@ -148,6 +149,7 @@ def main():
     ap.add_argument("--until")
     ap.add_argument("--cmd")
     ap.add_argument("--shot")
+    ap.add_argument("--time", action="store_true")
     a = ap.parse_args()
 
     deadline = time.time() + a.wait
@@ -166,6 +168,9 @@ def main():
     status = 0
     shot = None                     # with --shot: bytes received after the request
     try:
+        if a.time:
+            phone.write(b"lv:time %d" % int(time.time()))
+            time.sleep(0.05)
         if a.cmd:
             phone.write(a.cmd.encode())
             if a.idle == 0:

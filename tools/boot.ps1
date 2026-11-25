@@ -30,6 +30,7 @@ function Send-Command([string]$cmd) {
     return $LASTEXITCODE
 }
 
+# The image goes over only once the phone is in fastboot (never while it is still switching).
 if (-not (Test-Fastboot)) {
     if (Test-Adb) {
         & $adb reboot bootloader
@@ -39,7 +40,7 @@ if (-not (Test-Fastboot)) {
     if (-not (Wait-Until { Test-Fastboot } 60)) { throw "the phone did not reach fastboot" }
 }
 cmd /c "`"$fastboot`" boot `"$Image`" 2>&1" | Select-Object -Last 1 | Write-Host
-$logArgs = @($usblog, "--wait", "40", "--idle", "$Idle")
+$logArgs = @($usblog, "--wait", "40", "--idle", "$Idle", "--time")    # --time: clock from this PC
 if ($Log) { Remove-Item $Log -ErrorAction SilentlyContinue; $logArgs += @("--out", $Log) }
 if ($Until) { $logArgs += @("--until", $Until) }
 $ErrorActionPreference = "Continue"     # usblog reports on stderr

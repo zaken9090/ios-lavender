@@ -45,7 +45,8 @@ while (-not $winner -and (Get-Date) -lt $deadline) {
     }
 }
 if (-not $winner) { throw "no result after $TimeoutMin min" }
-foreach ($id in $ids) { if ($id -ne $winner.databaseId) { gh run cancel $id -R $Repo 2>$null | Out-Null } }
+# "Cannot cancel a workflow run that is completed" (both finished together) is not an error here
+foreach ($id in $ids) { if ($id -ne $winner.databaseId) { $ErrorActionPreference = "Continue"; cmd /c "gh run cancel $id -R $Repo >nul 2>&1"; $ErrorActionPreference = "Stop" } }
 $dir = Join-Path $OutRoot "run-$($winner.databaseId)"
 New-Item -ItemType Directory -Force $dir | Out-Null
 gh run download $winner.databaseId -R $Repo -n xnu-kernel -D $dir

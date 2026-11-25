@@ -5,10 +5,27 @@ lavender: time of day from the PM660 RTC; lv:time from the host
 - made by xnu/src/mk_rtc.py
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index 6401c6c..ce24dcc 100644
+index 6401c6c..9ee053d 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -447,7 +447,12 @@ spmi_byte(bool write, unsigned addr, uint8_t *val)
+@@ -414,6 +414,8 @@ ud_setup(void)
+ #define PON_REASON_BOOTLOADER   2
+ #define PS_HOLD_PA      0x010ac000u     /* DT restart@10ac000 */
+ 
++static vm_offset_t spmi_cnfg_map;
++
+ static int
+ spmi_channel(unsigned peripheral)
+ {
+@@ -427,6 +429,7 @@ spmi_channel(unsigned peripheral)
+ 	if (core == 0 || cnfg == 0) {
+ 		return -1;
+ 	}
++	spmi_cnfg_map = cnfg;
+ 	for (unsigned i = 0; i < 512; i++) {
+ 		uint32_t map = usb_rd(core, 0x800 + 4 * i);
+ 		if (map == 0 || ((map >> 8) & 0xfff) != peripheral) {
+@@ -447,10 +450,18 @@ spmi_byte(bool write, unsigned addr, uint8_t *val)
  	if (channel < 0) {
  		return -1;
  	}
@@ -22,7 +39,13 @@ index 6401c6c..ce24dcc 100644
  	if (ch == 0) {
  		return -1;
  	}
-@@ -531,6 +536,94 @@ ud_press(int key)
++	if (write && (usb_rd(spmi_cnfg_map, 0x700 + 4 * (unsigned)channel) & 7) != 0) {
++		return -4;              /* channel not ours */
++	}
+ 	if (write) {
+ 		*(volatile uint32_t *)(ch + SPMI_WDATA) = *val;
+ 		__asm__ volatile ("dsb sy" ::: "memory");
+@@ -531,6 +542,120 @@ ud_press(int key)
  	sweet_hid_key(key, 0);
  }
  
@@ -55,10 +78,30 @@ index 6401c6c..ce24dcc 100644
 +	return -1;
 +}
 +
++/*
++ * "lv:time" can arrive before the calendar exists (the host sends it as soon as USB is up), when
++ * clock_set_calendar_microtime() must not run yet (it hung the boot): keep it with its arrival
++ * time and hand it out here, where the calendar is initialized from, writing it to the RTC too.
++ */
++static uint64_t rtc_host_secs, rtc_host_abs;
++static volatile bool rtc_calendar_ready;
++
++int sweet_rtc_set(uint32_t secs);
++
 +int
 +sweet_rtc_get(uint32_t *secs)
 +{
 +	uint8_t ctrl = 0;
++	if (rtc_host_secs != 0 && !rtc_calendar_ready) {
++		uint64_t ns;
++		absolutetime_to_nanoseconds(mach_absolute_time() - rtc_host_abs, &ns);
++		*secs = (uint32_t)(rtc_host_secs + ns / NSEC_PER_SEC);
++		rtc_calendar_ready = true;
++		printf("SWEET RTC: calendar from the host: %u\n", *secs);
++		(void)sweet_rtc_set(*secs);
++		return 0;
++	}
++	rtc_calendar_ready = true;
 +	int r = spmi_byte(false, RTC_CTRL, &ctrl);
 +	if (r == 0) {
 +		r = rtc_read32(secs);
@@ -110,6 +153,12 @@ index 6401c6c..ce24dcc 100644
 +		printf("LV USB: lv:time: bad value\n");
 +		return;
 +	}
++	if (!rtc_calendar_ready) {
++		rtc_host_abs = mach_absolute_time();
++		rtc_host_secs = secs;
++		printf("LV USB: host time %llu kept until the calendar starts\n", secs);
++		return;
++	}
 +	printf("LV USB: calendar set to %llu by the host\n", secs);
 +	clock_set_calendar_microtime((clock_sec_t)secs, 0);
 +}
@@ -117,7 +166,7 @@ index 6401c6c..ce24dcc 100644
  /* One command per bulk OUT packet. */
  static void
  ud_rx_done(void)
-@@ -559,6 +652,8 @@ ud_rx_done(void)
+@@ -559,6 +684,8 @@ ud_rx_done(void)
  		ud_reboot_bootloader();
  	} else if (strcmp(cmd, "lv:shot") == 0) {
  		ud.shot_pending = true;
