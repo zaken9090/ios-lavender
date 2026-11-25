@@ -1041,3 +1041,19 @@ index 370d18b..096aa06 100644
  	}
  }
  #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index d2f4fa1..40ad760 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -435,9 +435,9 @@ SweetHIDTouch::start(IOService *provider)
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
++	fLogicalH = native ? 2340 : 2436;               /* lavender: 2340-row panel */
+ 	fOffX = ((fLogicalW - 1080) / 2) & ~3;           /* as SweetFramebuffer.cpp */
+-	fOffY = (fLogicalH - 2400) / 2;
++	fOffY = (fLogicalH - 2340) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
