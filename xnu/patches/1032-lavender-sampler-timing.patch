@@ -1,0 +1,30 @@
+lavender: sampler timing from boot-args (sweetsample_first, sweetsample_s, sweetsample_n)
+
+- sweet_sample.c: first sample, interval and count configurable
+- made by xnu/src/mk_samplefast.py
+
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 44da38d..8fff519 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -71,12 +71,17 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ 	if (sweet_sample_names[0] == '-') {
+ 		return;
+ 	}
+-	(void)tsleep(&chan, PZERO, "sweetsmp", 90 * hz);
+-	for (int i = 0; i < 40; i++) {
++	/* lavender: timing from boot-args (xnu/src/mk_samplefast.py) */
++	uint32_t first = 90, every = 120, count = 40;
++	PE_parse_boot_argn("sweetsample_first", &first, sizeof(first));
++	PE_parse_boot_argn("sweetsample_s", &every, sizeof(every));
++	PE_parse_boot_argn("sweetsample_n", &count, sizeof(count));
++	(void)tsleep(&chan, PZERO, "sweetsmp", (int)first * hz);
++	for (int i = 0; i < (int)count; i++) {
+ 		printf("SMP --- sample %d\n", i);
+ 		proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);
+ 		sweet_surface_report();
+-		(void)tsleep(&chan, PZERO, "sweetsmp", 120 * hz);
++		(void)tsleep(&chan, PZERO, "sweetsmp", (int)(every ? every : 1) * hz);
+ 	}
+ }
+ 
