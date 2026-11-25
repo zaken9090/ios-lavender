@@ -28,6 +28,9 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    **Done 2026-11-25** (patch 1011, lv_gpu=8): firmware travels in the payload's ramdisk slot
    (tools/mkpayload.py --fw, never in the repo), with a zeroed 64 KB zone handed to mem_setup.
 4. SMMU pass-through (gpu_identity=1) → GFSR 0.
+   **Done 2026-11-25** (patch 1012, lv_gpu=10): SMR0 = SID 0 exactly, S2CR0 -> CB0, CB0 M off.
+   The SMMU global space is emulated by the hypervisor: only plain asm ldr/str work (compiler
+   ldp/writeback accesses hang), only entries below NUMSMRG (3), no attach-impl-defs.
 5. PM4/PFP, a5xx_hw_init, ring, ME_INIT → "CP up".
 6. Self-test CACHE_FLUSH_TS → fence value in memory.
 7. Ids 512 / 0x05010200 / 0x44000 → RedwoodGPU published.
