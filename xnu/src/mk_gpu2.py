@@ -4,7 +4,8 @@ The firmware is proprietary and stays out of the repo and the CI kernel: tools/m
 packs a512_zap.mdt/.bNN (and the a530 PM4/PFP microcode for later) into the payload's ramdisk slot,
 which the shim copies into the kernel's static memory, and adds lv_fwpa=<pa> (layout: fw_archive in
 mkpayload.py). The archive also carries a zeroed 64 KB zone: the memory handed to TrustZone with
-mem_setup, since lavender's DT has no fixed zap region (pil-tz-generic).
+mem_setup, since lavender's DT has no fixed zap region (pil-tz-generic). That zone proved wrong
+(inside iOS memory: the UI hung); the kernel now uses low RAM at lv_zapzone (default 0x95000000).
 
 Sequence after the base TopazAdreno.cpp zap_load / Linux qcom_mdt_load + qcom_scm_pas_*:
   PIL_SHUTDOWN (ignore result), PIL_INIT_IMAGE(13, metadata pa), PIL_MEM_SETUP(13, zone, span),
@@ -119,7 +120,28 @@ lavender_gpu_zap(void)
 		LOG("LVZAP layout unexpected: %#x..%#x, zone %#x", min_a, max_a, zone_size);
 		return;
 	}
-	uint64_t mdt_pa = fwpa + (uint64_t)(mdt - (const uint8_t *)ar), zone_pa = fwpa + zone_off;
+	/*
+	 * TrustZone gets memory outside everything iOS maps: Android allocates PIL memory below 4 GiB
+	 * with no kernel mapping (speculative CPU reads of XPU-locked memory are violations). With the
+	 * zone inside the kernel's static memory (0x1025e8000) the zap loaded but backboardd hung, no
+	 * frames at all (2026-11-25). Default 0x95000000: free low RAM right after cdsp_fw_region
+	 * (DT reserved-memory), not given to XNU. Metadata at +0, the image region at +1 MB.
+	 */
+	uint64_t low = 0x95000000ull;
+	PE_parse_boot_argn("lv_zapzone", &low, sizeof(low));
+	volatile uint8_t *lowva = (volatile uint8_t *)ml_io_map(low, 0x200000);
+	if (lowva == NULL) {
+		LOG("LVZAP map of %#llx failed", low);
+		return;
+	}
+	for (uint32_t i = 0; i < 0x200000; i += 4) {
+		*(volatile uint32_t *)(lowva + i) = 0;
+	}
+	for (uint32_t i = 0; i < mdt_size; i++) {
+		lowva[i] = mdt[i];
+	}
+	__asm__ volatile ("dsb sy" ::: "memory");
+	uint64_t mdt_pa = low, zone_pa = low + 0x100000;
 	uint64_t res = 0, st;
 	LOG("LVZAP archive %#llx: mdt %u bytes at %#llx, zone %#llx (+%#x), span %#x", fwpa, mdt_size, mdt_pa,
 	    zone_pa, zone_size, max_a - min_a);
@@ -136,7 +158,7 @@ lavender_gpu_zap(void)
 	if (st != 0 || res != 0) {
 		return;
 	}
-	volatile uint8_t *zone = (volatile uint8_t *)(ar + zone_off);
+	volatile uint8_t *zone = lowva + 0x100000;
 	for (uint32_t i = 0; i < phnum && phoff + 32 * (i + 1) <= mdt_size; i++) {
 		const uint8_t *ph = mdt + phoff + 32 * i;
 		uint32_t paddr = *(const uint32_t *)(ph + 12), filesz = *(const uint32_t *)(ph + 16);
