@@ -6,14 +6,16 @@ param(
     [Parameter(Mandatory)][string]$Kernel,
     [Parameter(Mandatory)][string]$Tag,
     [string]$Extra = "",
-    [int]$Seconds = 40
+    [int]$Seconds = 40,
+    [string]$Fw                 # GPU firmware folder (kept outside the repo), e.g. ..\..\downloads\gpu-fw
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $k = (Get-ChildItem $Kernel -Recurse -Filter "kernel.*" | Select-Object -First 1).FullName
 $cmdline = ((Get-Content shim\out\e7-bootargs.txt) + " " + $Extra).Trim()
-python tools\mkpayload.py "shim\out\payload-$Tag.bin" --kernel $k --adt shim\out\lavender.adt --cmdline $cmdline | Out-Null
+$fwArgs = @(); if ($Fw) { $fwArgs = @("--fw", (Resolve-Path $Fw).Path) }
+python tools\mkpayload.py "shim\out\payload-$Tag.bin" --kernel $k --adt shim\out\lavender.adt --cmdline $cmdline @fwArgs | Out-Null
 powershell -ExecutionPolicy Bypass -File shim\build.ps1 -Dtb ..\dump\miui-boot\split\dtb5.dtb -Payload "shim\out\payload-$Tag.bin" -Out "shim\out\$Tag.img" | Out-Null
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -match "usblog" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 powershell -ExecutionPolicy Bypass -File tools\boot.ps1 -Image "shim\out\$Tag.img" -Log "..\dump\usblog-$Tag.txt" -Until "SWEET FPS" -Idle 240 | Out-Null
@@ -23,5 +25,5 @@ $p = Start-Process python -ArgumentList "tools\usblog.py", "--wait", "3", "--out
 Start-Sleep $Seconds
 Stop-Process -Id $p.Id -Force
 $real = (Select-String -Path $f -Pattern "HID: touch [0-8] ").Count
-Select-String -Path "..\dump\usblog-$Tag.txt", $f -Pattern "LVGPU" | ForEach-Object { $_.Line }
+Select-String -Path "..\dump\usblog-$Tag.txt", $f -Pattern "LVGPU|LVZAP" | ForEach-Object { $_.Line }
 "TOUCHTEST $Tag ($Extra): real touches $real"
