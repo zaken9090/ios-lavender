@@ -1,0 +1,108 @@
+lavender: SMS line - wired IOSurface memory by creating process (who holds 1.5 GB with gpu=1)
+
+- SweetSurface: creator name per surface; sweet_surface_report() sums the published buffer surfaces by creator
+  and prints them with sweet_surface_wired; the sampler calls it every round
+- made by xnu/src/mk_surfstat.py
+
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index b40eccd..44da38d 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -23,6 +23,7 @@
+ extern task_t proc_task(proc_t);
+ extern int hz;
+ extern void sweet_sample_start(void);
++extern void sweet_surface_report(void);     /* SweetSurface.cpp: SMS line (xnu/src/mk_surfstat.py) */
+ 
+ static char sweet_sample_names[128];
+ 
+@@ -74,6 +75,7 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ 	for (int i = 0; i < 40; i++) {
+ 		printf("SMP --- sample %d\n", i);
+ 		proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);
++		sweet_surface_report();
+ 		(void)tsleep(&chan, PZERO, "sweetsmp", 120 * hz);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index e17297a..2e1030e 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -282,6 +282,53 @@ sweet_scanout_free_slot(int slot)
+ 
+ OSDefineMetaClassAndStructors(SweetSurface, OSObject);
+ 
++/*
++ * lavender: the sampler's SMS line - wired buffer surfaces, and those still in the table by the
++ * process that created them (xnu/src/mk_surfstat.py).
++ */
++extern "C" void sweet_surface_report(void);
++void
++sweet_surface_report(void)
++{
++	struct { char name[20]; uint64_t bytes; uint32_t n; } by[12];
++	unsigned names = 0, n = 0;
++	uint64_t table = 0;
++	char line[480];
++	int len;
++
++	if (sweet_surface_lock == NULL) {
++		return;
++	}
++	IOLockLock(sweet_surface_lock);
++	for (uint32_t id = 1; id < SWEET_SURFACE_MAX_ID; id++) {
++		SweetSurface *t = sweet_surface_table[id];
++		if (t == NULL || OSDynamicCast(IOBufferMemoryDescriptor, t->memory) == NULL) {
++			continue;
++		}
++		n++;
++		table += t->allocSize;
++		unsigned i;
++		for (i = 0; i < names && strncmp(by[i].name, t->creator, sizeof(by[i].name)) != 0; i++) {
++		}
++		if (i == names && names < 12) {
++			strlcpy(by[i].name, t->creator[0] ? t->creator : "?", sizeof(by[i].name));
++			by[i].bytes = 0;
++			by[i].n = 0;
++			names++;
++		}
++		if (i < names) {
++			by[i].bytes += t->allocSize;
++			by[i].n++;
++		}
++	}
++	IOLockUnlock(sweet_surface_lock);
++	len = snprintf(line, sizeof(line), "SMS wired %llu | table %llu in %u |", sweet_surface_wired >> 20, table >> 20, n);
++	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 40; i++) {
++		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u", by[i].name, by[i].bytes >> 20, by[i].n);
++	}
++	IOLog("%s\n", line);
++}
++
+ void
+ SweetSurface::free()
+ {
+@@ -1114,6 +1161,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 			}
+ 		}
+ 	}
++	proc_selfname(s->creator, sizeof(s->creator));      /* lavender: for the SMS lines */
+ 	if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
+ 		char name[32];
+ 		proc_selfname(name, sizeof(name));
+diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
+index 5b74320..0a9b54a 100644
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -47,9 +47,10 @@ public:
+ 	bool                      wrapped;      /* memory is a prepared range of a task (IOSurfaceWrapClient*) */
+ 	bool                      gpuPool;      /* topaz GPU: memory from the GPU pool below 4 GiB (scanoutPhys = its address) */
+ 	uint64_t                  poolSize;     /* bytes taken from the GPU pool (allocSize and a guard) */
++	char                      creator[20];  /* lavender: the creating process (xnu/src/mk_surfstat.py) */
+ 	uint32_t                  drawn;        /* topaz GPU: last submission naming this surface (RedwoodGPU.cpp) */
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; creator[0] = 0; return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
