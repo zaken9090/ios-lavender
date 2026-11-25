@@ -1,0 +1,173 @@
+lavender: time of day from the PM660 RTC; lv:time from the host
+
+- SweetPlatformExpert get/setGMTTimeOfDay: PM660 RTC (0x6000) through the SPMI code in sweet_usb.c
+- sweet_usb.c: SPMI channel mappings cached; USB command "lv:time SECS" sets the calendar (and the RTC)
+- made by xnu/src/mk_rtc.py
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 6401c6c..ce24dcc 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -447,7 +447,12 @@ spmi_byte(bool write, unsigned addr, uint8_t *val)
+ 	if (channel < 0) {
+ 		return -1;
+ 	}
+-	vm_offset_t ch = ml_io_map((write ? SPMI_CHNLS_PA : SPMI_OBSRVR_PA) + 0x8000u * (uint32_t)channel, 0x1000);
++	static vm_offset_t maps[2][512];
++	vm_offset_t ch = maps[write][channel];
++	if (ch == 0) {
++		ch = ml_io_map((write ? SPMI_CHNLS_PA : SPMI_OBSRVR_PA) + 0x8000u * (uint32_t)channel, 0x1000);
++		maps[write][channel] = ch;
++	}
+ 	if (ch == 0) {
+ 		return -1;
+ 	}
+@@ -531,6 +536,94 @@ ud_press(int key)
+ 	sweet_hid_key(key, 0);
+ }
+ 
++/*
++ * lavender: PM660 RTC (DT qcom,pm660_rtc_rw@6000): a running count of seconds.
++ * 0x6040..43 write data, 0x6046 bit 7 enable, 0x6048..4b read data (little endian).
++ */
++#define RTC_WDATA       0x6040
++#define RTC_CTRL        0x6046
++#define RTC_RDATA       0x6048
++
++static int
++rtc_read32(uint32_t *out)
++{
++	uint8_t b[4], again = 0;
++	for (int tries = 0; tries < 3; tries++) {
++		for (int i = 0; i < 4; i++) {
++			if (spmi_byte(false, RTC_RDATA + i, &b[i]) != 0) {
++				return -1;
++			}
++		}
++		if (spmi_byte(false, RTC_RDATA, &again) != 0) {
++			return -1;
++		}
++		if (again == b[0]) {    /* no carry out of byte 0 while reading */
++			*out = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
++			return 0;
++		}
++	}
++	return -1;
++}
++
++int
++sweet_rtc_get(uint32_t *secs)
++{
++	uint8_t ctrl = 0;
++	int r = spmi_byte(false, RTC_CTRL, &ctrl);
++	if (r == 0) {
++		r = rtc_read32(secs);
++	}
++	printf("SWEET RTC: read %u (ctrl %#x) -> %d\n", r == 0 ? *secs : 0, ctrl, r);
++	return r != 0 || !(ctrl & 0x80) ? -1 : 0;
++}
++
++int
++sweet_rtc_set(uint32_t secs)
++{
++	uint8_t v[4] = { (uint8_t)secs, (uint8_t)(secs >> 8), (uint8_t)(secs >> 16), (uint8_t)(secs >> 24) };
++	uint8_t zero = 0;
++	uint32_t back = 0;
++	/* qpnp-rtc order: stop, byte 0 = 0, bytes 1..3, byte 0, start */
++	int r = spmi_update(RTC_CTRL, 0x80, 0);
++	if (r == 0) {
++		r = spmi_byte(true, RTC_WDATA, &zero);
++	}
++	for (int i = 1; r == 0 && i < 4; i++) {
++		r = spmi_byte(true, RTC_WDATA + i, &v[i]);
++	}
++	if (r == 0) {
++		r = spmi_byte(true, RTC_WDATA, &v[0]);
++	}
++	int e = spmi_update(RTC_CTRL, 0x80, 0x80);      /* always restart the counter */
++	if (r == 0) {
++		r = e;
++	}
++	if (r == 0) {
++		r = rtc_read32(&back);
++	}
++	printf("SWEET RTC: set %u -> %d, reads back %u\n", secs, r, back);
++	return r;
++}
++
++/* "lv:time SECS": seconds since 1970 (UTC) from the host. */
++static void
++ud_set_time(const char *arg)
++{
++	uint64_t secs = 0;
++	while (*arg == ' ') {
++		arg++;
++	}
++	for (; *arg >= '0' && *arg <= '9'; arg++) {
++		secs = secs * 10 + (uint64_t)(*arg - '0');
++	}
++	if (secs < 1600000000ULL || secs > 0xffffffffULL) {
++		printf("LV USB: lv:time: bad value\n");
++		return;
++	}
++	printf("LV USB: calendar set to %llu by the host\n", secs);
++	clock_set_calendar_microtime((clock_sec_t)secs, 0);
++}
++
+ /* One command per bulk OUT packet. */
+ static void
+ ud_rx_done(void)
+@@ -559,6 +652,8 @@ ud_rx_done(void)
+ 		ud_reboot_bootloader();
+ 	} else if (strcmp(cmd, "lv:shot") == 0) {
+ 		ud.shot_pending = true;
++	} else if (strncmp(cmd, "lv:time ", 8) == 0) {
++		ud_set_time(cmd + 8);
+ 	} else if (strcmp(cmd, "lv:power") == 0) {
+ 		ud_press(0);
+ 	} else if (strcmp(cmd, "lv:volup") == 0) {
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 5d78358..07e5c39 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -11,6 +11,8 @@
+ #include <IOKit/IOLib.h>
+ 
+ extern "C" void sweet_usb_probe(void);
++extern "C" int sweet_rtc_get(uint32_t *secs);
++extern "C" int sweet_rtc_set(uint32_t secs);
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -20,6 +22,8 @@ public:
+ 	void processTopLevel(IORegistryEntry *root) APPLE_KEXT_OVERRIDE;
+ 	const char *deleteList(void) APPLE_KEXT_OVERRIDE;
+ 	const char *excludeList(void) APPLE_KEXT_OVERRIDE;
++	long getGMTTimeOfDay(void) APPLE_KEXT_OVERRIDE;
++	void setGMTTimeOfDay(long secs) APPLE_KEXT_OVERRIDE;
+ };
+ 
+ OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
+@@ -37,6 +41,22 @@ SweetPlatformExpert::start(IOService *provider)
+ 	return true;
+ }
+ 
++/* lavender: the calendar lives in the PM660 RTC (bsd/dev/sweet_usb.c). */
++long
++SweetPlatformExpert::getGMTTimeOfDay(void)
++{
++	uint32_t secs = 0;
++	return sweet_rtc_get(&secs) == 0 ? (long)secs : 0;
++}
++
++void
++SweetPlatformExpert::setGMTTimeOfDay(long secs)
++{
++	if (secs > 0 && secs <= 0xffffffffL) {
++		(void)sweet_rtc_set((uint32_t)secs);
++	}
++}
++
+ const char *
+ SweetPlatformExpert::deleteList(void)
+ {
