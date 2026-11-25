@@ -43,13 +43,13 @@ s = s.replace(old, '''	if (sig == 6 || sig == 5) {
 			}
 			seen[found++] = word;
 			if (n > (int)sizeof(line) - 20) {
-				printf("%s\n", line);
+				printf("%s\\n", line);
 				n = snprintf(line, sizeof(line), "CRASH %s scan", name);
 			}
 			n += snprintf(line + n, sizeof(line) - n, " 0x%llx", word);
 		}
 		if (found != 0) {
-			printf("%s\n", line);
+			printf("%s\\n", line);
 		}
 	}
 ''')

@@ -4,10 +4,10 @@ lavender: abort crash report lists main-binary addresses left on the stack
 - made by xnu/src/mk_crashscan.py
 
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
-index 08f9612..eacce33 100644
+index 08f9612..7c0510d 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -895,6 +895,38 @@ sweet_crash_log(const char *name, int pid, int sig, uint64_t code, uint64_t subc
+@@ -895,6 +895,36 @@ sweet_crash_log(const char *name, int pid, int sig, uint64_t code, uint64_t subc
  	}
  	if (sig == 6 || sig == 5) {
  		sweet_crash_strings(name);
@@ -33,15 +33,13 @@ index 08f9612..eacce33 100644
 +			}
 +			seen[found++] = word;
 +			if (n > (int)sizeof(line) - 20) {
-+				printf("%s
-+", line);
++				printf("%s\n", line);
 +				n = snprintf(line, sizeof(line), "CRASH %s scan", name);
 +			}
 +			n += snprintf(line + n, sizeof(line) - n, " 0x%llx", word);
 +		}
 +		if (found != 0) {
-+			printf("%s
-+", line);
++			printf("%s\n", line);
 +		}
  	}
  }
