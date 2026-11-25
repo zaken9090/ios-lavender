@@ -9,7 +9,9 @@ gcc-sdm660.c / gpucc-sdm660.c (GPUCC at 0x5065000) and gdsc.c:
        (CFG 0x1074: GPLL0 source 5, divider 2 -> 300 MHz), branch 0x1098; rbbmtimer 0x10d0
   GPU (0x5000000): RBBM_STATUS 0x4f5, always-on counter 0x4d2 (after RBBM_PERFCTR_CNTL 0x464 = 1),
        CP_SCRATCH 0xb78 write/read back (register offsets are in 32-bit words).
-Logs every register before and after, nothing else is touched. GX takes over 10 ms to report PWR_ON (seen 2026-11-25), hence a 100 ms wait. A hang here = the GX rail is
+Logs every register before and after, nothing else is touched. GX took over 100 ms to report PWR_ON
+with the gfx3d root off (CMD bit 31 ROOT_OFF, seen 2026-11-25): the DT asks for force-enable-root-clk,
+so CMD bit 1 ROOT_EN is set before GX, and the wait is up to 1 s. A hang here = the GX rail is
 off (it is a CPR regulator, not voted yet).
 
 usage: python mk_gpu1.py XNU_TREE
@@ -55,9 +57,9 @@ lv_gdsc_on(uint32_t off, const char *name)
 {
 	uint32_t before = lv_r(lv_gpucc, off);
 	lv_w(lv_gpucc, off, before & ~1u);
-	for (int i = 0; i < 10000; i++) {
+	for (int i = 0; i < 100000; i++) {
 		if (lv_r(lv_gpucc, off) & 0x80000000u) {
-			LOG("LVGPU %s GDSC on (%#x -> %#x)", name, before, lv_r(lv_gpucc, off));
+			LOG("LVGPU %s GDSC on after %d us (%#x -> %#x)", name, i * 10, before, lv_r(lv_gpucc, off));
 			return true;
 		}
 		IODelay(10);
@@ -91,6 +93,11 @@ lavender_gpu_probe(void)
 	lv_w(lv_gpucc, 0x1074, (5u << 8) | 3u);
 	lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
 	for (int i = 0; i < 200 && (lv_r(lv_gpucc, 0x1070) & 1u); i++) {
+		IODelay(10);
+	}
+	/* DT force-enable-root-clk: hold the root on (CMD bit 1 ROOT_EN) until GX is up; bit 31 = ROOT_OFF */
+	lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 2u);
+	for (int i = 0; i < 200 && (lv_r(lv_gpucc, 0x1070) & 0x80000000u); i++) {
 		IODelay(10);
 	}
 	LOG("LVGPU gfx3d rcg cmd %#x cfg %#x", lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074));
