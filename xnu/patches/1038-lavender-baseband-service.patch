@@ -1,0 +1,79 @@
+lavender: built-in AppleBaseband service for CommCenter (TelephonyBasebandCreateController)
+
+- SweetWatchdog.cpp: AppleBaseband, same accept-all user client as AppleIPAppender, log "LV BB:"
+- made by xnu/src/mk_baseband.py
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 00271f5..bcf001f 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -65,6 +65,28 @@ AppleIPAppender::start(IOService *provider)
+ 	return true;
+ }
+ 
++/* lavender: AppleBaseband (xnu/src/mk_baseband.py) - CommCenter's baseband controller opens it; no modem behind it yet */
++class AppleBaseband : public IOService {
++	OSDeclareDefaultStructors(AppleBaseband);
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleBaseband, IOService);
++
++bool
++AppleBaseband::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty(kIOUserClientClassKey, "AppleIPAppenderUserClient");
++	registerService();
++	IOLog("LV BB: AppleBaseband registered (accepts calls, no modem behind it)\n");
++	return true;
++}
++
+ class AppleIPAppenderUserClient : public IOUserClient {
+ 	OSDeclareDefaultStructors(AppleIPAppenderUserClient);
+ 
+@@ -85,6 +107,7 @@ AppleIPAppenderUserClient::clientClose(void)
+ }
+ 
+ static uint64_t lv_pdp_logged;          /* selectors already logged (< 64) */
++static uint64_t lv_bb_logged;           /* ... of AppleBaseband */
+ 
+ IOReturn
+ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+@@ -103,13 +126,15 @@ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
+ 	} else if (args->structureOutput != NULL) {
+ 		bzero(args->structureOutput, args->structureOutputSize);
+ 	}
+-	if (selector >= 64 || !(lv_pdp_logged & (1ULL << selector))) {
++	bool bb = OSDynamicCast(AppleBaseband, getProvider()) != NULL;
++	uint64_t *logged = bb ? &lv_bb_logged : &lv_pdp_logged;
++	if (selector >= 64 || !(*logged & (1ULL << selector))) {
+ 		if (selector < 64) {
+-			lv_pdp_logged |= 1ULL << selector;
++			*logged |= 1ULL << selector;
+ 		}
+ 		char name[32];
+ 		proc_selfname(name, sizeof(name));
+-		IOLog("LV PDP: %s sel %u in %u/%u out %u/%u -> ok\n", name, selector,
++		IOLog("LV %s: %s sel %u in %u/%u out %u/%u -> ok\n", bb ? "BB" : "PDP", name, selector,
+ 		    args->scalarInputCount, args->structureInputSize,
+ 		    args->scalarOutputCount, args->structureOutputSize);
+ 	}
+@@ -134,6 +159,13 @@ IOWatchdog::start(IOService *provider)
+ 		}
+ 		pdp->release();
+ 	}
++	AppleBaseband *bb = OSTypeAlloc(AppleBaseband);
++	if (bb != NULL) {
++		if (!bb->init() || !bb->attach(provider) || !bb->start(provider)) {
++			IOLog("LV BB: AppleBaseband did not start\n");
++		}
++		bb->release();
++	}
+ 	return true;
+ }
+ 
