@@ -141,6 +141,21 @@ lavender_gpu_probe(uint32_t level)
 		if (ldo) {
 			LOG("LVGPU gfx ldo: %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x",
 			    ldo[0], ldo[1], ldo[2], ldo[3], ldo[4], ldo[5], ldo[6], ldo[7], ldo[8], ldo[9], ldo[10], ldo[11], ldo[12]);
+			/*
+			 * BHS (head switch from the rail, msm gfx_ldo.c) at PWRSWITCH_CTRL 0x1c: seen 0x80000038 =
+			 * LDO_CLAMP_IO (31) set, LDO_PDN (5), LDO_UNDER_SW_CTRL (4), BHS_EN_REST (3), but not
+			 * BHS_EN_FEW (2) / BHS_UNDER_SW_CTL (1): GX gets no power. Boot-arg lv_bhs=0 skips this.
+			 */
+			uint32_t bhs = 1;
+			PE_parse_boot_argn("lv_bhs", &bhs, sizeof(bhs));
+			if (bhs) {
+				uint32_t c = ldo[7];
+				c |= 1u << 1;  ldo[7] = c; __asm__ volatile ("dsb sy" ::: "memory"); IODelay(1);
+				c |= 1u << 2;  ldo[7] = c; __asm__ volatile ("dsb sy" ::: "memory"); IODelay(5);
+				c |= 1u << 3;  ldo[7] = c; __asm__ volatile ("dsb sy" ::: "memory"); IODelay(5);
+				c &= ~(1u << 31); ldo[7] = c; __asm__ volatile ("dsb sy" ::: "memory"); IODelay(5);
+				LOG("LVGPU gfx BHS on: ctrl %#x status 0x20 %#x 0x24 %#x", ldo[7], ldo[8], ldo[9]);
+			}
 		}
 	}
 
