@@ -1,0 +1,54 @@
+lavender: Sandbox extensions are issued (token) and consumed (handle)
+
+- sweet_amfi.c sweet_sandbox_syscall(): ops 5 and 6 no longer ENOENT (tccd could not grant assetsd Photos access)
+- made by xnu/src/mk_sbext.py
+
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index 49ead96..3f45456 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -322,8 +322,42 @@ sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
+ 	switch (call) {
+ 	case 4:         /* container path (audit token / pid) */
+ 		return sweet_sandbox_container_path(arg);
+-	case 5:         /* extension issue */
+-	case 6:         /* extension consume */
++	case 5: {       /* extension issue: lavender answers a token (xnu/src/mk_sbext.py) */
++		struct {
++			user_addr_t cls;
++			uint64_t    type;
++			user_addr_t data;
++			uint64_t    flags;
++			user_addr_t token;
++			uint64_t    pid;
++			uint64_t    pidversion;
++		} a;
++		char token[160] = "lavender;";
++		size_t done = 0;
++		int error = copyin(arg, &a, sizeof(a));
++		if (error) {
++			return error;
++		}
++		if (a.cls != 0) {
++			(void)copyinstr(a.cls, token + 9, sizeof(token) - 9, &done);
++			token[sizeof(token) - 1] = 0;
++		}
++		return a.token != 0 ? copyout(token, a.token, strlen(token) + 1) : EINVAL;
++	}
++	case 6: {       /* extension consume: a handle, nothing to extend */
++		struct {
++			user_addr_t token;
++			uint64_t    length;
++			user_addr_t handle;
++		} a;
++		static uint64_t handles;
++		uint64_t handle = ++handles;
++		int error = copyin(arg, &a, sizeof(a));
++		if (error) {
++			return error;
++		}
++		return a.handle != 0 ? copyout(&handle, a.handle, sizeof(handle)) : 0;
++	}
+ 	case 0x43:      /* container expected */
+ 		return ENOENT;
+ 	default:
