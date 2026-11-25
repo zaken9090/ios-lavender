@@ -120,6 +120,36 @@ def flatten_kernel(path):
     return bytes(image), image_va, memsize, entry
 
 
+FW_FILES = ("a512_zap.mdt", "a512_zap.b00", "a512_zap.b01", "a512_zap.b02", "a530_pm4.fw", "a530_pfp.fw")
+FW_ZAPMEM = 0x10000
+
+
+def fw_archive(folder):
+    """GPU firmware for the kernel, kept out of the repo and the CI kernel (proprietary).
+
+    The shim copies the ramdisk slot right after the kernel image, inside the kernel's static
+    memory (below top_of_kernel_data), so nothing reuses it; mkpayload adds lv_fwpa=<pa>.
+      0x00 char[8] "LVFW0001", u32 count, u32 zapmem_off, u32 zapmem_size, u32 0
+      0x18 count x { char name[24]; u32 off; u32 size }
+    Files start on 4 KB boundaries; zapmem (64 KB, zeroed, 64 KB aligned) is the memory handed to
+    TrustZone for the zap shader (PAS 13 mem_setup): lavender's DT has no fixed region for it.
+    """
+    files = [(n, (Path(folder) / n).read_bytes()) for n in FW_FILES if (Path(folder) / n).exists()]
+    off = 0x1000
+    table, blobs = b"", b""
+    for name, data in files:
+        table += struct.pack("<24sII", name.encode(), off, len(data))
+        blob = data + b"\0" * (-len(data) % 0x1000)
+        blobs += blob
+        off += len(blob)
+    zap_off = (off + FW_ZAPMEM - 1) & ~(FW_ZAPMEM - 1)
+    head = struct.pack("<8sIIII", b"LVFW0001", len(files), zap_off, FW_ZAPMEM, 0) + table
+    if len(head) > 0x1000:
+        raise SystemExit("firmware table too long")
+    body = head.ljust(0x1000, b"\0") + blobs
+    return body.ljust(zap_off, b"\0") + b"\0" * FW_ZAPMEM
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
@@ -130,6 +160,7 @@ def main():
     ap.add_argument("--adt")
     ap.add_argument("--ramdisk")
     ap.add_argument("--cmdline", default="")
+    ap.add_argument("--fw", help="folder of GPU firmware: packed into the ramdisk slot (see fw_archive)")
     a = ap.parse_args()
 
     if a.kernel:
@@ -149,6 +180,14 @@ def main():
         mem_size, = struct.unpack("<Q", chosen.prop("dram-size"))
     ramdisk = Path(a.ramdisk).read_bytes() if a.ramdisk else b""
     cmdline = a.cmdline.encode()
+    if a.fw:
+        if ramdisk:
+            ap.error("--fw and --ramdisk both use the ramdisk slot")
+        ramdisk = fw_archive(a.fw)
+        virt_base = image_va & ~(BLOCK_32M - 1)
+        ramdisk_pa = (image_va - virt_base + phys_base + memsize + PAGE_16K - 1) & ~(PAGE_16K - 1)
+        cmdline += f" lv_fwpa=0x{ramdisk_pa:x}".encode()
+        print(f"firmware archive 0x{len(ramdisk):x} bytes at pa 0x{ramdisk_pa:x}")
     if len(cmdline) >= 608:
         raise SystemExit("command line too long")
 
