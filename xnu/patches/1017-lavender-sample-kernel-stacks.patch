@@ -1,0 +1,43 @@
+lavender: the process sampler shows where waiting threads are in the kernel (SMK lines)
+
+- exception.c sweet_sample_task(): for a thread not running, its state, block hint, wait event and the kernel
+  frames from its saved kernel context (unslid)
+- made by xnu/src/mk_ksample.py
+
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index a20a764..f73e988 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1036,6 +1036,32 @@ sweet_sample_task(const char *name, int pid, task_t task)
+ 			fp = frame[0];
+ 		}
+ 		printf("%s\n", line);
++
++		/* lavender: where a waiting thread is in the kernel (xnu/src/mk_ksample.py) */
++		int st = thread->state;
++		vm_offset_t ks = thread->kernel_stack;
++		if ((st & TH_RUN) == 0 && ks != 0) {
++			struct arm_kernel_saved_state *kss = &((thread_kernel_state_t)thread->machine.kstackptr)->machine.ss;
++			uint64_t kfp = kss->fp;
++			n = snprintf(line, sizeof(line), "SMK %s t%d st 0x%x hint %d ev 0x%llx k 0x%llx", name, tn - 1, st,
++			    (int)thread->block_hint, (uint64_t)VM_KERNEL_ADDRHIDE(thread->wait_event),
++			    (uint64_t)VM_KERNEL_ADDRHIDE(kss->lr));
++			for (int i = 0; i < 20 && n < (int)sizeof(line) - 20; i++) {
++				if (kfp < ks || kfp + 16 > ks + kernel_stack_size || (kfp & 7) != 0) {
++					break;
++				}
++				uint64_t next = ((uint64_t *)kfp)[0], lr = ((uint64_t *)kfp)[1];
++				if (lr == 0) {
++					break;
++				}
++				n += snprintf(line + n, sizeof(line) - n, " 0x%llx", (uint64_t)VM_KERNEL_ADDRHIDE(lr));
++				if (next <= kfp) {
++					break;
++				}
++				kfp = next;
++			}
++			printf("%s\n", line);
++		}
+ 	}
+ 	task_unlock(task);
+ }
