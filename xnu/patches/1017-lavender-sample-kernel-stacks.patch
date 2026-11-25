@@ -1,14 +1,37 @@
-lavender: the process sampler shows where waiting threads are in the kernel (SMK lines)
+lavender: the process sampler shows where waiting threads are in the kernel (SMK lines) and memory (SMM lines)
 
 - exception.c sweet_sample_task(): for a thread not running, its state, block hint, wait event and the kernel
-  frames from its saved kernel context (unslid)
+  frames from its saved kernel context (unslid); per process its resident size and footprint, and the
+  system page counts (MB)
 - made by xnu/src/mk_ksample.py
 
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
-index a20a764..f73e988 100644
+index a20a764..08f9612 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -1036,6 +1036,32 @@ sweet_sample_task(const char *name, int pid, task_t task)
+@@ -822,6 +822,7 @@ exception_triage(
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <vm/vm_shared_region.h>
++#include <vm/vm_page.h>
+ #include <arm/thread.h>
+ 
+ /*
+@@ -1010,6 +1011,13 @@ sweet_sample_task(const char *name, int pid, task_t task)
+ 		vm_shared_region_deallocate(sr);
+ 	}
+ 	printf("SMP %s[%d] slide 0x%llx mh 0x%llx\n", name, pid, slide, task->mach_header_vm_address);
++	/* lavender: memory (xnu/src/mk_ksample.py), MB */
++#define LV_MB(pages) ((unsigned)(((uint64_t)(pages) * PAGE_SIZE) >> 20))
++	printf("SMM %s rss %llu foot %llu | free %u spec %u active %u inactive %u wired %u ext %u int %u target %u throttle %u\n",
++	    name, get_task_resident_size(task) >> 20, get_task_phys_footprint(task) >> 20,
++	    LV_MB(vm_page_free_count), LV_MB(vm_page_speculative_count), LV_MB(vm_page_active_count),
++	    LV_MB(vm_page_inactive_count), LV_MB(vm_page_wire_count), LV_MB(vm_page_pageable_external_count),
++	    LV_MB(vm_page_pageable_internal_count), LV_MB(vm_page_free_target), LV_MB(vm_page_throttle_limit));
+ 
+ 	task_lock(task);
+ 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+@@ -1036,6 +1044,32 @@ sweet_sample_task(const char *name, int pid, task_t task)
  			fp = frame[0];
  		}
  		printf("%s\n", line);

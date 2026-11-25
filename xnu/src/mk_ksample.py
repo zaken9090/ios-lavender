@@ -25,6 +25,21 @@ def sub(old, new):
     s = s.replace(old, new)
 
 
+# memory: the task's resident size and footprint, and the system's page counts (MB)
+sub('''#include <vm/vm_shared_region.h>
+''', '''#include <vm/vm_shared_region.h>
+#include <vm/vm_page.h>
+''')
+sub('''	printf("SMP %s[%d] slide 0x%llx mh 0x%llx\\n", name, pid, slide, task->mach_header_vm_address);
+''', '''	printf("SMP %s[%d] slide 0x%llx mh 0x%llx\\n", name, pid, slide, task->mach_header_vm_address);
+	/* lavender: memory (xnu/src/mk_ksample.py), MB */
+#define LV_MB(pages) ((unsigned)(((uint64_t)(pages) * PAGE_SIZE) >> 20))
+	printf("SMM %s rss %llu foot %llu | free %u spec %u active %u inactive %u wired %u ext %u int %u target %u throttle %u\\n",
+	    name, get_task_resident_size(task) >> 20, get_task_phys_footprint(task) >> 20,
+	    LV_MB(vm_page_free_count), LV_MB(vm_page_speculative_count), LV_MB(vm_page_active_count),
+	    LV_MB(vm_page_inactive_count), LV_MB(vm_page_wire_count), LV_MB(vm_page_pageable_external_count),
+	    LV_MB(vm_page_pageable_internal_count), LV_MB(vm_page_free_target), LV_MB(vm_page_throttle_limit));
+''')
 sub('''		printf("%s\\n", line);
 	}
 	task_unlock(task);
