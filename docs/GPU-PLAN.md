@@ -25,6 +25,8 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    GX PWR_ON shows only after the unclamp. RBBM_STATUS 0x1, always-on counting, scratch r/w ok.
 2. Chip id → 0x05010200 (from DT qcom,chipid; a5xx has no id register).
 3. Zap (PAS 13) → init_image / mem_setup / auth_reset = 0.
+   **Done 2026-11-25** (patch 1011, lv_gpu=8): firmware travels in the payload's ramdisk slot
+   (tools/mkpayload.py --fw, never in the repo), with a zeroed 64 KB zone handed to mem_setup.
 4. SMMU pass-through (gpu_identity=1) → GFSR 0.
 5. PM4/PFP, a5xx_hw_init, ring, ME_INIT → "CP up".
 6. Self-test CACHE_FLUSH_TS → fence value in memory.
