@@ -1,0 +1,88 @@
+lavender: sampler SMC line - CPU time by process since the last round
+
+- sweet_sample.c: cpu_time ledger deltas, the eight biggest, percent of one core
+- made by xnu/src/mk_cpustat.py
+
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 8fff519..d5d1881 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -61,6 +61,70 @@ sweet_sample_proc(proc_t p, __unused void *arg)
+ 	return PROC_RETURNED;
+ }
+ 
++/* lavender: CPU time by process since the last round (xnu/src/mk_cpustat.py) */
++extern uint64_t get_task_cpu_time(task_t);
++extern uint64_t mach_absolute_time(void);
++extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
++static struct { int pid; uint64_t last; } lv_cpu[512];
++static struct { char name[20]; uint64_t d; } lv_top[8];
++static uint64_t lv_cpu_sum;
++
++static int
++lv_cpu_proc(proc_t p, __unused void *arg)
++{
++	int pid = proc_pid(p);
++	task_t task = proc_task(p);
++	uint64_t t, d = 0;
++	unsigned slot = (unsigned)pid % 512, tries = 0;
++
++	if (task == TASK_NULL) {
++		return PROC_RETURNED;
++	}
++	t = get_task_cpu_time(task);
++	while (tries++ < 512 && lv_cpu[slot].last != 0 && lv_cpu[slot].pid != pid) {
++		slot = (slot + 1) % 512;
++	}
++	if (lv_cpu[slot].pid == pid && lv_cpu[slot].last != 0 && t >= lv_cpu[slot].last) {
++		d = t - lv_cpu[slot].last;
++	}
++	lv_cpu[slot].pid = pid;
++	lv_cpu[slot].last = t ? t : 1;
++	lv_cpu_sum += d;
++	for (int i = 0; i < 8; i++) {
++		if (d > lv_top[i].d) {
++			for (int j = 7; j > i; j--) {
++				lv_top[j] = lv_top[j - 1];
++			}
++			lv_top[i].d = d;
++			proc_name(pid, lv_top[i].name, sizeof(lv_top[i].name));
++			break;
++		}
++	}
++	return PROC_RETURNED;
++}
++
++static void
++lv_cpu_report(void)
++{
++	static uint64_t before;
++	uint64_t now = mach_absolute_time(), ns = 0;
++	char line[320];
++	int n;
++
++	bzero(lv_top, sizeof(lv_top));
++	lv_cpu_sum = 0;
++	proc_iterate(PROC_ALLPROCLIST, lv_cpu_proc, NULL, NULL, NULL);
++	absolutetime_to_nanoseconds(now - before, &ns);
++	if (before != 0 && ns != 0) {
++		n = snprintf(line, sizeof(line), "SMC %llu ms: all %llu |", ns / 1000000, lv_cpu_sum * 100 / ns);
++		for (int i = 0; i < 8 && lv_top[i].d != 0 && n < (int)sizeof(line) - 40; i++) {
++			n += snprintf(line + n, sizeof(line) - n, " %s %llu", lv_top[i].name, lv_top[i].d * 100 / ns);
++		}
++		printf("%s\n", line);
++	}
++	before = now;
++}
++
+ static void
+ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+@@ -81,6 +145,7 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ 		printf("SMP --- sample %d\n", i);
+ 		proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);
+ 		sweet_surface_report();
++		lv_cpu_report();
+ 		(void)tsleep(&chan, PZERO, "sweetsmp", (int)(every ? every : 1) * hz);
+ 	}
+ }
