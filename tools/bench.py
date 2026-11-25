@@ -149,14 +149,28 @@ def main():
         time.sleep(a.settle)
         # unlock: Power (wakes a sleeping screen, locks an awake one, so check after each try)
         home = False
+        # The swipe starts above the bottom edge band (y > 2291 is an edge contact since patch 1010,
+        # which the lock screen did not take as unlock), and the unlock can take ~4 s to settle.
+        # The framebuffer keeps the last frame while iOS has the display off (sweetfb_stayon), so a
+        # screenshot cannot tell: Power is pressed until the kernel logs "display on" after it.
+        def wake():
+            for _ in range(2):
+                m = rd.mark()
+                cmd(phone, "lv:power", 2.0)
+                got = rd.since(m)
+                if b"display on" in got:
+                    return
+                if b"display off" not in got:
+                    return              # nothing logged: assume it was a wake that needed none
+        wake()
         for attempt in range(4):
             shot = screenshot(phone, rd, None)
             if shot and is_home(shot):
                 home = True
                 break
-            if attempt % 2 == 1 or attempt == 0:
-                cmd(phone, "lv:power", 1.5)
-            cmd(phone, "lv:swipe 540 2320 540 1100 250", 2.5)
+            if attempt == 2:
+                wake()
+            cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
         screenshot(phone, rd, f"bench_{a.tag}_{stamp}_home.png")
         if not home:
             print("bench: NOT UNLOCKED (see the screenshot)", file=sys.stderr)
