@@ -14,6 +14,10 @@ with the gfx3d root off (CMD bit 31 ROOT_OFF, seen 2026-11-25): the DT asks for 
 so CMD bit 1 ROOT_EN is set before GX, and the wait is up to 1 s. A hang here = the GX rail is
 off (it is a CPR regulator, not voted yet).
 
+Stages (lv_gpu=N, to find what disturbs the panel's touch, seen 2026-11-25: with the full probe the
+NT36672A reports no fingers): 1 map + log, 2 GCC branches + gpucc cxo, 3 + CX GDSC, 4 + gfx3d RCG,
+5 + GX GDSC / clamp / gfx3d branch, 6 + GPU register reads.
+
 usage: python mk_gpu1.py XNU_TREE
 """
 import sys
@@ -69,7 +73,7 @@ lv_gdsc_on(uint32_t off, const char *name)
 }
 
 static void
-lavender_gpu_probe(void)
+lavender_gpu_probe(uint32_t level)
 {
 	lv_gcc = (volatile uint32_t *)ml_io_map(0x00100000, 0x80000);
 	lv_gpucc = (volatile uint32_t *)ml_io_map(0x05065000, 0x2000);
@@ -83,11 +87,21 @@ lavender_gpu_probe(void)
 	    lv_r(lv_gpucc, 0x1004), lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130),
 	    lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074), lv_r(lv_gpucc, 0x1098));
 
+	if (level < 2) {
+		return;
+	}
 	lv_w(lv_gcc, 0x5200c, lv_r(lv_gcc, 0x5200c) | (1u << 4) | (1u << 3));   /* GPLL0 to the GPU */
 	bool ok = lv_branch(lv_gcc, 0x71004, "gpu_cfg_ahb") & lv_branch(lv_gcc, 0x71010, "gpu_bimc_gfx") &
 	    lv_branch(lv_gcc, 0x7106c, "bimc_gfx");
 	ok &= lv_branch(lv_gpucc, 0x1020, "gpucc_cxo");
+	if (level < 3) {
+		LOG("LVGPU stage 2 (GCC branches) done");
+		return;
+	}
 	ok &= lv_gdsc_on(0x1004, "CX");
+	if (level < 4) {
+		return;
+	}
 
 	/* gfx3d: GPLL0 (source 5) / 2 = 300 MHz */
 	lv_w(lv_gpucc, 0x1074, (5u << 8) | 3u);
@@ -102,6 +116,9 @@ lavender_gpu_probe(void)
 	}
 	LOG("LVGPU gfx3d rcg cmd %#x cfg %#x", lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074));
 
+	if (level < 5) {
+		return;
+	}
 	/* GX: reset pulse, power, AON reset pulse, unclamp, then its clock */
 	lv_w(lv_gpucc, 0x1090, 1);
 	IODelay(10);
@@ -115,7 +132,7 @@ lavender_gpu_probe(void)
 	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
 	LOG("LVGPU power %s: cx %#x gx %#x clamp %#x gfx3d %#x", ok ? "ok" : "INCOMPLETE",
 	    lv_r(lv_gpucc, 0x1004), lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130), lv_r(lv_gpucc, 0x1098));
-	if (!ok) {
+	if (!ok || level < 6) {
 		return;
 	}
 
@@ -143,7 +160,7 @@ sub('''		lavender_memcpy_speed("after");
 	uint32_t gpu = 0;
 	PE_parse_boot_argn("lv_gpu", &gpu, sizeof(gpu));
 	if (gpu) {
-		lavender_gpu_probe();
+		lavender_gpu_probe(gpu);
 	}
 }''')
 open(p, 'w', newline='\n').write(s)
