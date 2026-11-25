@@ -1,0 +1,124 @@
+lavender: RPM link on SDM660, DDR vote (lv_ddr_khz) and memcpy speed
+
+- TopazRpm.cpp: message RAM 0x778000, APCS IPC doorbell 0x17911008 mapped locally
+- lavender_perf_start(): memcpy speed, vote BIMC (clk2 id 0, KHz) to lv_ddr_khz, memcpy speed again
+- made by xnu/src/mk_perf.py
+
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 07e5c39..5664a80 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -11,6 +11,7 @@
+ #include <IOKit/IOLib.h>
+ 
+ extern "C" void sweet_usb_probe(void);
++extern "C" void lavender_perf_start(void);
+ extern "C" int sweet_rtc_get(uint32_t *secs);
+ extern "C" int sweet_rtc_set(uint32_t secs);
+ 
+@@ -37,6 +38,7 @@ SweetPlatformExpert::start(IOService *provider)
+ 	}
+ 	registerService();
+ 	sweet_usb_probe();     /* lavender: kernel log over USB from early boot (bsd/dev/sweet_usb.c) */
++	lavender_perf_start();  /* lavender: DDR vote and memcpy speed (TopazRpm.cpp) */
+ 	IOLog("SWEET: platform expert registered\n");
+ 	return true;
+ }
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index 419835e..0f88341 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -18,9 +18,23 @@
+ #define LOG(fmt, ...)       IOLog("TopazRpm: " fmt "\n", ##__VA_ARGS__)
+ 
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+-extern "C" void topaz_apcs_kick(unsigned bit);
++/* lavender: APCS IPC (DT irq-reg-base 0x17911008) */
++static void
++topaz_apcs_kick(unsigned bit)
++{
++	static volatile uint32_t *ipc;
++	if (ipc == NULL) {
++		vm_offset_t m = ml_io_map(0x17911000, 0x1000);
++		ipc = m ? (volatile uint32_t *)(m + 8) : NULL;
++	}
++	if (ipc != NULL) {
++		__asm__ volatile ("dsb sy" ::: "memory");
++		*ipc = 1u << bit;
++		__asm__ volatile ("dsb sy" ::: "memory");
++	}
++}
+ 
+-#define MSG_RAM_PA          0x045F0000ull
++#define MSG_RAM_PA          0x00778000ull    /* lavender (SDM660); topaz 0x045F0000 */
+ #define MSG_RAM_SIZE        0x7000u
+ #define TOC_SIZE            256u
+ #define TOC_MAGIC           0x67727430u     /* "grt0" */
+@@ -325,6 +339,67 @@ topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t
+ 	return ok;
+ }
+ 
++/*
++ * lavender: memcpy speed (DDR bandwidth) and the DDR vote. A thread of its own: the RPM link
++ * sleeps while it waits for answers.
++ */
++#include <kern/thread.h>
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++
++#define RPM_MEM_CLK         0x326b6c63u     /* "clk2" */
++#define RPM_KEY_KHZ         0x007a484bu     /* "KHz" */
++
++static void
++lavender_memcpy_speed(const char *when)
++{
++	const vm_size_t size = 16u << 20;
++	void *a = IOMallocData(size), *b = IOMallocData(size);
++	if (a == NULL || b == NULL) {
++		LOG("memcpy %s: no memory", when);
++	} else {
++		memset(a, 0x5a, size);
++		memset(b, 0xa5, size);
++		uint64_t t0 = mach_absolute_time(), ns;
++		for (int i = 0; i < 8; i++) {
++			memcpy(i & 1 ? a : b, i & 1 ? b : a, size);
++		}
++		absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
++		LOG("LVDDR memcpy %s: 128 MB in %llu ms, %llu MB/s", when, ns / 1000000,
++		    ns ? 128ull * 1000000000ull / ns : 0);
++	}
++	if (a) {
++		IOFreeData(a, size);
++	}
++	if (b) {
++		IOFreeData(b, size);
++	}
++}
++
++static void
++lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
++{
++	uint32_t khz = 0;
++	PE_parse_boot_argn("lv_ddr_khz", &khz, sizeof(khz));
++	IOSleep(2000);
++	lavender_memcpy_speed("before");
++	if (khz != 0) {
++		bool ok = topaz_rpm_write(0, RPM_MEM_CLK, 0, RPM_KEY_KHZ, khz);
++		LOG("LVDDR vote %u kHz -> %s", khz, ok ? "acked" : "FAILED");
++		IOSleep(100);
++		lavender_memcpy_speed("after");
++	}
++}
++
++extern "C" void
++lavender_perf_start(void)
++{
++	thread_t thread;
++	if (kernel_thread_start(lavender_perf_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	}
++}
++
+ #else
+ extern "C" bool topaz_rpm_write(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
+ #endif
