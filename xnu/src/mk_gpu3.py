@@ -79,10 +79,19 @@ lavender_gpu_smmu(uint32_t level)
 	lv_w(m, 0x1000, 0x0001f000);            /* CBAR0: S1 translate, S2 bypass */
 	LOG("LVSMMU CB0 SCTLR 0xe0 (M off)");
 	lv_w(m, 0x8000, 0xe0);                  /* SCTLR: M off = GPU addresses are physical */
-	if (!(m[0x800 / 4] & 0x80000000u)) {    /* SMR0 not valid: SID 0 (mask 1: 0-1) -> CB0 */
-		LOG("LVSMMU S2CR0 -> CB0, SMR0 SID 0 mask 1");
+	/*
+	 * SID 0 exactly (DT iommus <smmu 0x00>, mask 0). SMR0 with mask 1 (SIDs 0-1, as the base did)
+	 * hung the phone at once (2026-11-25): the stream-match table is likely the hypervisor's, which
+	 * accepts only the streams the DT gives the HLOS. lv_smmu_smr=0 skips it.
+	 */
+	uint32_t do_smr = 1;
+	PE_parse_boot_argn("lv_smmu_smr", &do_smr, sizeof(do_smr));
+	if (do_smr && !(m[0x800 / 4] & 0x80000000u)) {
+		LOG("LVSMMU S2CR0 = translate CB0");
 		lv_w(m, 0xc00, 0);
-		lv_w(m, 0x800, (1u << 31) | (1u << 16));
+		LOG("LVSMMU SMR0 = valid, SID 0, mask 0");
+		lv_w(m, 0x800, 1u << 31);
+		LOG("LVSMMU SMR0 written");
 	}
 	LOG("LVSMMU GFSR clear, TLB");
 	lv_w(m, 0x48, m[0x48 / 4]);             /* GFSR: write back to clear */
