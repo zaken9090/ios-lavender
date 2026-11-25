@@ -2,7 +2,7 @@
 
   SMC <interval ms>: all <percent of one core> | name <percent> ...   (the eight biggest)
 
-From each task's cpu_time ledger (get_task_cpu_time, nanoseconds). 400 = four cores full.
+From each task's cpu_time ledger (get_task_cpu_time: timebase ticks, converted). 400 = four cores full.
 
 usage: python mk_cpustat.py XNU_TREE
 """
@@ -40,7 +40,7 @@ lv_cpu_proc(proc_t p, __unused void *arg)
 	if (task == TASK_NULL) {
 		return PROC_RETURNED;
 	}
-	t = get_task_cpu_time(task);
+	absolutetime_to_nanoseconds(get_task_cpu_time(task), &t);       /* (the ledger counts timebase ticks) */
 	while (tries++ < 512 && lv_cpu[slot].last != 0 && lv_cpu[slot].pid != pid) {
 		slot = (slot + 1) % 512;
 	}

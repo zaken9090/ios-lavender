@@ -4,7 +4,8 @@ lavender: sampler SMC line - CPU time by process since the last round
 - made by xnu/src/mk_cpustat.py
 
 diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
-index 8fff519..d5d1881 100644
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 8fff519..46e3c0c 100644
 --- a/bsd/dev/sweet_sample.c
 +++ b/bsd/dev/sweet_sample.c
 @@ -61,6 +61,70 @@ sweet_sample_proc(proc_t p, __unused void *arg)
@@ -30,7 +31,7 @@ index 8fff519..d5d1881 100644
 +	if (task == TASK_NULL) {
 +		return PROC_RETURNED;
 +	}
-+	t = get_task_cpu_time(task);
++	absolutetime_to_nanoseconds(get_task_cpu_time(task), &t);       /* (the ledger counts timebase ticks) */
 +	while (tries++ < 512 && lv_cpu[slot].last != 0 && lv_cpu[slot].pid != pid) {
 +		slot = (slot + 1) % 512;
 +	}
