@@ -39,7 +39,12 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    **Done 2026-11-25** (patch 1014, gpu=1): TopazAdreno's hardware layer on the A512, GPU pool moved to
    0xA1000000 (free low RAM), empty-submission fence self-test done; UI fps unchanged (4.5 / 13.0).
 8. Userland CI (macOS runner: Mesa freedreno + OSMesa, redwood-drm, libtopaz-gl, inject) → into the root → UI drawn by the GPU, bench.
-   **Partial 2026-11-25**: GL draws the lock screen (FD512), but no unlock, frames 0.5-1.5 s late,
+   **Works 2026-11-25** (patches 1016-1019, gpu=1 glfetch=0): unlocks, Settings 28.6 fps (CPU: 13.0),
+   home 7.3. The stall was memory: released IOSurface views kept as zombies (256 per client) held
+   their whole pixel buffers, 1.2 GB wired of 1.95 GB (CollectionsPoster 914 MB, PosterBoard 300+),
+   so the UI paged code in from disk, throttled. 1019 keeps only the state page: wired 1700 -> 219 MB.
+   Open: scrolling shows stale rows (CA draws only damage; first project's glpreserve), home 7 fps.
+   Earlier note - **Partial 2026-11-25**: GL draws the lock screen (FD512), but no unlock, frames 0.5-1.5 s late,
    then a hang. Plan (from a review of the user's first project, ios-lavender patches 1018-1036 and
    userland commits; each port asked for first):
    a. **Pool descriptors as sub-ranges of the chunk's** (first project 1021, ~30 lines, TopazAdreno.cpp).
