@@ -20,7 +20,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 
 ## Steps (each with a kernel-log signal)
 1. Addresses + power (GCC branches, CX/GX GDSC, gfx3d from GPLL0) → GDSC on, RBBM_STATUS sane.
-2. Chip id → 0x05010200.
+   **Done 2026-11-25** (patch 1009, lv_gpu=7): needs the GX rail voted over RPM (smpb3 vlvl) and the
+   gfx LDO head switch (BHS, 0x506e01c) on and unclamped, else unclamping GX stops the display + touch.
+   GX PWR_ON shows only after the unclamp. RBBM_STATUS 0x1, always-on counting, scratch r/w ok.
+2. Chip id → 0x05010200 (from DT qcom,chipid; a5xx has no id register).
 3. Zap (PAS 13) → init_image / mem_setup / auth_reset = 0.
 4. SMMU pass-through (gpu_identity=1) → GFSR 0.
 5. PM4/PFP, a5xx_hw_init, ring, ME_INIT → "CP up".
