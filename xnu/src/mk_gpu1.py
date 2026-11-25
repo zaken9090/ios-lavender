@@ -9,7 +9,7 @@ gcc-sdm660.c / gpucc-sdm660.c (GPUCC at 0x5065000) and gdsc.c:
        (CFG 0x1074: GPLL0 source 5, divider 2 -> 300 MHz), branch 0x1098; rbbmtimer 0x10d0
   GPU (0x5000000): RBBM_STATUS 0x4f5, always-on counter 0x4d2 (after RBBM_PERFCTR_CNTL 0x464 = 1),
        CP_SCRATCH 0xb78 write/read back (register offsets are in 32-bit words).
-Logs every register before and after, nothing else is touched. A hang here = the GX rail is
+Logs every register before and after, nothing else is touched. GX takes over 10 ms to report PWR_ON (seen 2026-11-25), hence a 100 ms wait. A hang here = the GX rail is
 off (it is a CPR regulator, not voted yet).
 
 usage: python mk_gpu1.py XNU_TREE
@@ -55,7 +55,7 @@ lv_gdsc_on(uint32_t off, const char *name)
 {
 	uint32_t before = lv_r(lv_gpucc, off);
 	lv_w(lv_gpucc, off, before & ~1u);
-	for (int i = 0; i < 1000; i++) {
+	for (int i = 0; i < 10000; i++) {
 		if (lv_r(lv_gpucc, off) & 0x80000000u) {
 			LOG("LVGPU %s GDSC on (%#x -> %#x)", name, before, lv_r(lv_gpucc, off));
 			return true;

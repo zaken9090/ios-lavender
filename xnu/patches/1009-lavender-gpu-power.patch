@@ -5,7 +5,7 @@ lavender: GPU step 1-2, Adreno 512 power-up probe (lv_gpu=1)
 - made by xnu/src/mk_gpu1.py
 
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index 0f88341..e3a8f49 100644
+index 0f88341..901fa61 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
 @@ -376,6 +376,100 @@ lavender_memcpy_speed(const char *when)
@@ -39,7 +39,7 @@ index 0f88341..e3a8f49 100644
 +{
 +	uint32_t before = lv_r(lv_gpucc, off);
 +	lv_w(lv_gpucc, off, before & ~1u);
-+	for (int i = 0; i < 1000; i++) {
++	for (int i = 0; i < 10000; i++) {
 +		if (lv_r(lv_gpucc, off) & 0x80000000u) {
 +			LOG("LVGPU %s GDSC on (%#x -> %#x)", name, before, lv_r(lv_gpucc, off));
 +			return true;
