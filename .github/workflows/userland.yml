@@ -43,6 +43,8 @@ jobs:
           mkdir -p work
           cp -R base/userland/. work/
           cp userland/gpu/* work/gpu/
+          # lavender's own changes to the base sources (each script asserts its anchors)
+          python3 userland/gpu/patch_preserve.py work/gpu/eagl.c
           # lavender installs into existing directories (the kernel writes the files, it makes no
           # directories): libraries in /usr/lib, the real backboardd kept as /usr/sbin/backboardd
           # (same file name: the process stays "backboardd")
