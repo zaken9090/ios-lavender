@@ -1,0 +1,168 @@
+lavender: fit the iPhone X canvas to the panel; touch diagnostics
+
+- SweetFramebuffer copy path: the 1125x2436 canvas is scaled (nearest pixel, 0.96) onto the
+  1080x2340 panel instead of cropping 22/48 pixels at each edge (the home indicator was cut off)
+- SweetHID: touch maps panel pixels to the whole canvas the same way
+- boot-arg sweetfb_fit=0 restores the crop
+- sweet_touch.c: boot-arg sweettouchdiag=N logs the first N reports (default 40), then every 200th
+- made by xnu/src/mk_fit.py
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 0186430..c60c552 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -54,6 +54,7 @@ static struct {
+ 	bool down[NVT_FINGERS];
+ 	int x[NVT_FINGERS], y[NVT_FINGERS];
+ 	uint64_t reports, errors;
++	int diag;                       /* boot-arg sweettouchdiag: log the first N reports, then every 200th */
+ } lt;
+ 
+ static inline uint32_t
+@@ -321,6 +322,10 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 		if (!line_high(lt.irq) || any_down) {
+ 			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN + 1) == 0) {
+ 				lt.reports++;
++				if ((int64_t)lt.reports <= lt.diag || (lt.diag && lt.reports % 200 == 0)) {
++					printf("SWEET TOUCH: report %llu: %02x %02x %02x %02x %02x %02x | %02x %02x %02x %02x %02x %02x\n",
++					    lt.reports, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12]);
++				}
+ 				touch_report(r);
+ 			} else if (++lt.errors <= 10) {
+ 				printf("SWEET TOUCH: read failed\n");
+@@ -343,6 +348,8 @@ sweet_touch_init(void)
+ 	thread_t thread;
+ 
+ 	PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
++	lt.diag = 40;
++	PE_parse_boot_argn("sweettouchdiag", &lt.diag, sizeof(lt.diag));
+ 	if (!enabled || started) {
+ 		return;
+ 	}
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 016ab2b..d83998b 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -95,6 +95,87 @@ static void sweet_bl_log(const char *who, OSDictionary *d);
+ extern "C" void sweet_dcache_clean(vm_offset_t addr, unsigned length);  /* osfmk/arm/caches.c */
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ 
++/*
++ * lavender: the presented canvas (1125x2436, iPhone X) is larger than the panel (1080x2340) by
++ * the same factor in both directions (0.960 / 0.961): fit it instead of showing its cropped centre.
++ * Nearest pixel: panel column px shows canvas column px * lw / pw (one table), row py likewise.
++ * Boot-arg sweetfb_fit=0: crop as before.
++ */
++static int sweet_fb_fit = -1;
++
++static bool
++sweet_fb_fit_on(void)
++{
++	if (sweet_fb_fit < 0) {
++		sweet_fb_fit = 1;
++		PE_parse_boot_argn("sweetfb_fit", &sweet_fb_fit, sizeof(sweet_fb_fit));
++	}
++	return sweet_fb_fit != 0;
++}
++
++/* One layer: logical rect (dx, dy, w, h) from source (sx, sy) into the panel buffer. */
++static void
++sweet_fit_copy(uint8_t *dst, uint32_t dstRowBytes, uint32_t pw, uint32_t ph, uint32_t lw, uint32_t lh,
++    const uint8_t *src, uint32_t srcRowBytes, uint64_t srcLen, uint32_t srcW, uint32_t srcH,
++    int32_t sx, int32_t sy, int32_t dx, int32_t dy, int32_t w, int32_t h)
++{
++	static uint16_t col[2048];
++	static uint32_t colFor;
++	if (pw > 2048 || lw == 0 || pw == 0 || ph == 0) {
++		return;
++	}
++	if (colFor != (pw << 16 | lw)) {
++		for (uint32_t px = 0; px < pw; px++) {
++			col[px] = (uint16_t)((uint64_t)px * lw / pw);
++		}
++		colFor = pw << 16 | lw;
++	}
++	if (sx < 0 || sy < 0) {
++		sx = sy = 0;
++	}
++	if (dx < 0) {
++		sx -= dx;
++		w += dx;
++		dx = 0;
++	}
++	if (dy < 0) {
++		sy -= dy;
++		h += dy;
++		dy = 0;
++	}
++	if (w > (int32_t)lw - dx) {
++		w = (int32_t)lw - dx;
++	}
++	if (h > (int32_t)lh - dy) {
++		h = (int32_t)lh - dy;
++	}
++	if (w > (int32_t)srcW - sx) {
++		w = (int32_t)srcW - sx;
++	}
++	if (h > (int32_t)srcH - sy) {
++		h = (int32_t)srcH - sy;
++	}
++	if (w <= 0 || h <= 0 ||
++	    (uint64_t)(sy + h - 1) * srcRowBytes + (uint64_t)(sx + w) * 4 > srcLen) {
++		return;
++	}
++	/* First panel row/column whose canvas coordinate is >= the rect start, and past its end. */
++	uint32_t px0 = (uint32_t)(((uint64_t)dx * pw + lw - 1) / lw);
++	uint32_t px1 = (uint32_t)(((uint64_t)(dx + w) * pw + lw - 1) / lw);
++	uint32_t py0 = (uint32_t)(((uint64_t)dy * ph + lh - 1) / lh);
++	uint32_t py1 = (uint32_t)(((uint64_t)(dy + h) * ph + lh - 1) / lh);
++	px1 = px1 > pw ? pw : px1;
++	py1 = py1 > ph ? ph : py1;
++	for (uint32_t py = py0; py < py1; py++) {
++		uint32_t ly = (uint32_t)((uint64_t)py * lh / ph);
++		const uint32_t *srow = (const uint32_t *)(src + (uint64_t)(sy + (int32_t)ly - dy) * srcRowBytes);
++		uint32_t *drow = (uint32_t *)(dst + (uint64_t)py * dstRowBytes);
++		for (uint32_t px = px0; px < px1; px++) {
++			drow[px] = srow[sx + (int32_t)col[px] - dx];
++		}
++	}
++}
++
+ #if defined(SWEET)
+ #include <IOKit/IOService.h>
+ #include <IOKit/IOUserClient.h>
+@@ -1398,6 +1479,14 @@ AppleCLCD::present(const uint8_t *rec)
+ 		if (dx < 0 || dy < 0) {
+ 			dx = dy = 0;
+ 		}
++		if (sweet_fb_fit_on() && src != 0 && bpe == 4 && s->elementWidth == 1 && s->elementHeight == 1 &&
++		    s->memory != NULL && s->offset < s->memory->getLength()) {
++			sweet_fit_copy(dst, fRowBytes, fWidth, fHeight, fLogicalW, fLogicalH,
++			    (const uint8_t *)(src + s->offset), s->bytesPerRow, s->memory->getLength() - s->offset,
++			    s->width, s->height, sx, sy, dx, dy, w, h);
++			s->release();
++			continue;
++		}
+ 		/* Logical (presented) display coordinates -> panel coordinates. */
+ 		dx -= fOffX;
+ 		dy -= fOffY;
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 40ad760..0abbc4c 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -464,8 +464,13 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+ 	/* Panel pixels -> the presented 1125x2436 display (SweetFramebuffer.cpp). */
+-	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+-	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++	static int fit = -1;
++	if (fit < 0) {
++		fit = 1;        /* lavender: the canvas is scaled to the whole panel (sweetfb_fit) */
++		PE_parse_boot_argn("sweetfb_fit", &fit, sizeof(fit));
++	}
++	IOFixed nx = fit ? (IOFixed)(((int64_t)x << 16) / 1080) : (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
++	IOFixed ny = fit ? (IOFixed)(((int64_t)y << 16) / 2340) : (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+ 	if (was == down && !moved) {
+ 		IOLockUnlock(fLock);
