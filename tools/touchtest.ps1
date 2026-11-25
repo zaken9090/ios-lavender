@@ -26,4 +26,5 @@ Start-Sleep $Seconds
 Stop-Process -Id $p.Id -Force
 $real = (Select-String -Path $f -Pattern "HID: touch [0-8] ").Count
 Select-String -Path "..\dump\usblog-$Tag.txt", $f -Pattern "LVGPU|LVZAP" | ForEach-Object { $_.Line }
-"TOUCHTEST $Tag ($Extra): real touches $real"
+$fps = (Select-String -Path $f -Pattern "SWEET FPS").Count      # no frames while touching = the UI hung
+"TOUCHTEST $Tag ($Extra): real touches $real, seconds with frames $fps"
