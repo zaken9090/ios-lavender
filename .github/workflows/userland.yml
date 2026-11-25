@@ -1,0 +1,90 @@
+name: userland
+
+# lavender: the GPU user space for iOS 16 (arm64, iphoneos SDK) on a macOS runner:
+# Mesa 25.0.7 (softpipe + freedreno over redwood-drm) as libOSMesa.8.dylib, the EAGL stand-in
+# (eagl.c + gl_osmesa.c) as libtopaz-gl.dylib, the backboardd loader (topaz_inject.c) as
+# libtopaz-inject.dylib and the backboardd wrapper (bbd_wrap.c), for /topaz/lib and
+# /usr/libexec on the iOS root.
+#
+# Sources: the MakrSas/ios-topaz userland at the same pinned commit as the kernel (not copied into
+# this repo), plus userland/gpu/mkeagl.py and eagl_slots.txt of this repo (the generator of
+# eagl_gen.h, which the base does not publish; from the user's first lavender project).
+# Workflow adapted from that project's userland.yml.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "userland/**"
+      - ".github/workflows/userland.yml"
+
+concurrency:
+  group: userland-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_REPO: https://github.com/MakrSas/ios-topaz
+  BASE_SHA: e4772911e116ab4ab6c4ac1f38e6106fefe8b483
+
+jobs:
+  build:
+    # macos-15 (arm64) jobs were often not picked up; the Intel image works
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Base userland
+        run: |
+          git init -q base
+          git -C base fetch -q --depth 1 "$BASE_REPO" "$BASE_SHA"
+          git -C base checkout -q FETCH_HEAD
+          mkdir -p work
+          cp -R base/userland/. work/
+          cp userland/gpu/* work/gpu/
+          ls -R work | head -40
+
+      - name: Deps
+        run: |
+          brew install meson ninja bison
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Mesa (freedreno + softpipe, OSMesa)
+        working-directory: work
+        run: |
+          # mk-mesa-mac.sh expects to sit next to mesa/ (its patches and redwood-drm)
+          cp mesa/mk-mesa-mac.sh .
+          mkdir -p build-mesa
+          # the script puts /opt/homebrew's bison first; on Intel Homebrew lives in /usr/local
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          bash -x mk-mesa-mac.sh || { grep -n -E -B3 -A25 "error:|FAILED:" build-mesa/ninja.log 2>/dev/null | head -150; tail -20 build-mesa/meson-setup.log 2>/dev/null; exit 1; }
+          ls -la build-mesa/out
+
+      - name: EAGL library, loader, backboardd wrapper
+        working-directory: work
+        run: |
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O1"
+          M=build-mesa/out
+          mkdir -p out
+          python3 gpu/mkeagl.py gpu/eagl_slots.txt $M/gl.xml $M/exported-gl.txt gpu/eagl.c > gpu/eagl_gen.h
+          $CC -dynamiclib -install_name /topaz/lib/libtopaz-gl.dylib -Igpu \
+            -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
+            $M/libOSMesa.8.dylib -o out/libtopaz-gl.dylib gpu/eagl.c gpu/gl_osmesa.c
+          $CC -dynamiclib -install_name /topaz/lib/libtopaz-inject.dylib \
+            -framework CoreFoundation -framework IOKit -lobjc \
+            -o out/libtopaz-inject.dylib gpu/topaz_inject.c
+          $CC -o out/backboardd gpu/bbd_wrap.c
+          cp $M/libOSMesa.8.dylib out/
+          for f in out/*.dylib out/backboardd; do codesign -s - -f "$f"; done
+          ls -la out
+          otool -L out/libtopaz-gl.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topaz-userland
+          path: work/out/
+          retention-days: 14
