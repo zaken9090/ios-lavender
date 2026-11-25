@@ -28,30 +28,51 @@ def sub(old, new):
 
 SMMU = r'''
 /* lavender GPU step 4 (lv_gpu=9 read, 10 program): GPU SMMU. See xnu/src/mk_gpu3.py. */
+/*
+ * Every SMMU access is one plain 32-bit ldr/str with a single base register: the SMMU's global
+ * space is likely trapped and emulated by the hypervisor, which can only decode such accesses
+ * (ESR ISV=1); a compiler-made ldp or writeback access cannot be emulated and hangs the phone.
+ */
+static volatile uint8_t *lv_smmu;
+static uint32_t
+sr(uint32_t off)
+{
+	uint32_t v;
+	volatile uint8_t *a = lv_smmu + off;
+	__asm__ volatile ("dsb sy\n\tldr %w0, [%1]" : "=r"(v) : "r"(a) : "memory");
+	return v;
+}
 static void
-lavender_gpu_smmu_dump(volatile uint32_t *m, const char *when)
+sw(uint32_t off, uint32_t v)
+{
+	volatile uint8_t *a = lv_smmu + off;
+	__asm__ volatile ("dsb sy\n\tstr %w0, [%1]\n\tdsb sy" :: "r"(v), "r"(a) : "memory");
+}
+
+static void
+lavender_gpu_smmu_dump(const char *when)
 {
 	LOG("LVSMMU %s: sCR0 %#x IDR0 %#x IDR1 %#x IDR2 %#x GFSR %#x | CB0 SCTLR %#x FSR %#x TCR %#x",
-	    when, m[0x0 / 4], m[0x20 / 4], m[0x24 / 4], m[0x28 / 4], m[0x48 / 4],
-	    m[0x8000 / 4], m[0x8058 / 4], m[0x8030 / 4]);
+	    when, sr(0x0), sr(0x20), sr(0x24), sr(0x28), sr(0x48),
+	    sr(0x8000), sr(0x8058), sr(0x8030));
 	/* only the non-secure stream-match groups / context banks: IDR0 NUMSMRG (3 here), IDR1 NUMCB (5).
 	 * Reading entries 3-7 (secure side's) hung the phone a little later, twice (2026-11-25). */
-	uint32_t nsmr = m[0x20 / 4] & 0xff, ncb = m[0x24 / 4] & 0xff;
+	uint32_t nsmr = sr(0x20) & 0xff, ncb = sr(0x24) & 0xff;
 	for (uint32_t i = 0; i < nsmr && i < 8; i++) {
 		LOG("LVSMMU %s: [%u] SMR %#x S2CR %#x CBAR %#x CBA2R %#x", when, i,
-		    m[(0x800 + 4 * i) / 4], m[(0xc00 + 4 * i) / 4], i < ncb ? m[(0x1000 + 4 * i) / 4] : 0, i < ncb ? m[(0x1800 + 4 * i) / 4] : 0);
+		    sr(0x800 + 4 * i), sr(0xc00 + 4 * i), i < ncb ? sr(0x1000 + 4 * i) : 0, i < ncb ? sr(0x1800 + 4 * i) : 0);
 	}
 }
 
 static void
 lavender_gpu_smmu(uint32_t level)
 {
-	volatile uint32_t *m = (volatile uint32_t *)ml_io_map(0x05040000, 0x10000);
-	if (m == NULL) {
+	lv_smmu = (volatile uint8_t *)ml_io_map(0x05040000, 0x10000);
+	if (lv_smmu == NULL) {
 		LOG("LVSMMU map failed");
 		return;
 	}
-	lavender_gpu_smmu_dump(m, "before");
+	lavender_gpu_smmu_dump("before");
 	if (level < 10) {
 		return;
 	}
@@ -69,16 +90,16 @@ lavender_gpu_smmu(uint32_t level)
 	PE_parse_boot_argn("lv_smmu_impl", &do_impl, sizeof(do_impl));
 	for (unsigned i = 0; do_impl && i < sizeof(impl) / sizeof(impl[0]); i++) {
 		LOG("LVSMMU impl %#x = %#x", impl[i][0], impl[i][1]);
-		lv_w((volatile uint32_t *)m, impl[i][0], impl[i][1]);
+		sw(impl[i][0], impl[i][1]);
 	}
 	LOG("LVSMMU CB0 SCTLR off, FSR clear");
-	lv_w(m, 0x8000, 0);                     /* CB0 SCTLR off while programming */
-	lv_w(m, 0x8058, 0xffffffff);            /* CB0 FSR clear */
+	sw(0x8000, 0);                     /* CB0 SCTLR off while programming */
+	sw(0x8058, 0xffffffff);            /* CB0 FSR clear */
 	LOG("LVSMMU CBA2R0 / CBAR0");
-	lv_w(m, 0x1800, 1);                     /* CBA2R0: AArch64 */
-	lv_w(m, 0x1000, 0x0001f000);            /* CBAR0: S1 translate, S2 bypass */
+	sw(0x1800, 1);                     /* CBA2R0: AArch64 */
+	sw(0x1000, 0x0001f000);            /* CBAR0: S1 translate, S2 bypass */
 	LOG("LVSMMU CB0 SCTLR 0xe0 (M off)");
-	lv_w(m, 0x8000, 0xe0);                  /* SCTLR: M off = GPU addresses are physical */
+	sw(0x8000, 0xe0);                  /* SCTLR: M off = GPU addresses are physical */
 	/*
 	 * SID 0 exactly (DT iommus <smmu 0x00>, mask 0). SMR0 with mask 1 (SIDs 0-1, as the base did)
 	 * hung the phone at once (2026-11-25): the stream-match table is likely the hypervisor's, which
@@ -86,22 +107,22 @@ lavender_gpu_smmu(uint32_t level)
 	 */
 	uint32_t do_smr = 1;
 	PE_parse_boot_argn("lv_smmu_smr", &do_smr, sizeof(do_smr));
-	if (do_smr && !(m[0x800 / 4] & 0x80000000u)) {
+	if (do_smr && !(sr(0x800) & 0x80000000u)) {
 		LOG("LVSMMU S2CR0 = translate CB0");
-		lv_w(m, 0xc00, 0);
+		sw(0xc00, 0);
 		LOG("LVSMMU SMR0 = valid, SID 0, mask 0");
-		lv_w(m, 0x800, 1u << 31);
+		sw(0x800, 1u << 31);
 		LOG("LVSMMU SMR0 written");
 	}
 	LOG("LVSMMU GFSR clear, TLB");
-	lv_w(m, 0x48, m[0x48 / 4]);             /* GFSR: write back to clear */
-	lv_w(m, 0x8618, 0);                     /* CB0 TLBIALL */
-	lv_w(m, 0x87f0, 0);                     /* CB0 TLBSYNC */
-	for (int i = 0; i < 1000 && (m[0x87f4 / 4] & 1); i++) {
+	sw(0x48, sr(0x48));             /* GFSR: write back to clear */
+	sw(0x8618, 0);                     /* CB0 TLBIALL */
+	sw(0x87f0, 0);                     /* CB0 TLBSYNC */
+	for (int i = 0; i < 1000 && (sr(0x87f4) & 1); i++) {
 		IODelay(1);
 	}
 	IODelay(1000);
-	lavender_gpu_smmu_dump(m, "after");
+	lavender_gpu_smmu_dump("after");
 }
 '''
 
