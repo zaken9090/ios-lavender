@@ -36,5 +36,7 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    **Steps 5-6 done 2026-11-25** (patch 1013, lv_gpu=11): A512 a5xx_hw_init, PM4/PFP + ring in low RAM
    (0x95400000), ME_INIT, SET_SECURE_MODE 0, PKT4 scratch write and CACHE_FLUSH_TS fence all complete.
 7. Ids 512 / 0x05010200 / 0x44000 → RedwoodGPU published.
+   **Done 2026-11-25** (patch 1014, gpu=1): TopazAdreno's hardware layer on the A512, GPU pool moved to
+   0xA1000000 (free low RAM), empty-submission fence self-test done; UI fps unchanged (4.5 / 13.0).
 8. Userland CI (macOS runner: Mesa freedreno + OSMesa, redwood-drm, libtopaz-gl, inject) → into the root → UI drawn by the GPU, bench.
 9. Later: SMMU translation, interrupts, GPU clock 600+ MHz (GX voltage vote), render straight into display surfaces.
