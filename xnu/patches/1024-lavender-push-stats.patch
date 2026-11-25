@@ -1,0 +1,50 @@
+lavender: count surfaces given to the GPU and pushed out of the CPU cache (stale rows while scrolling)
+
+- RedwoodGPU.cpp submit: surface buffers named, from the pool, pushed (bytes) and skipped, a line every 5 s
+- made by xnu/src/mk_pushstat.py
+
+diff --git a/iokit/Kernel/arm/RedwoodGPU.cpp b/iokit/Kernel/arm/RedwoodGPU.cpp
+index a4e5569..62263a6 100644
+--- a/iokit/Kernel/arm/RedwoodGPU.cpp
++++ b/iokit/Kernel/arm/RedwoodGPU.cpp
+@@ -188,6 +188,8 @@ static bool gGPUCached;                         /* boot-arg gpu_cached=1 */
+ static struct {
+ 	uint64_t since, flushing, waiting, taking;      /* times of the processor's clock */
+ 	uint64_t flushed;                       /* bytes sent out of the cache */
++	uint32_t lv_named, lv_pool, lv_pushed, lv_skipped;      /* lavender: surface buffers (mk_pushstat.py) */
++	uint64_t lv_pushed_bytes;
+ 	uint32_t submissions, commands, buffers, surfaces, waits, over;
+ 	uint32_t made, given_again;             /* buffers of their own made for programs, and of those kept ones given again */
+ 	uint64_t making;                        /* ... and the time it took to make the others */
+@@ -1045,15 +1047,22 @@ RedwoodGPUUserClient::submit(struct msm_gem_submit * request)
+ 		if (b == NULL) {
+ 			continue;
+ 		}
++		if (b->surface != NULL) {
++			gGPUStat.lv_named++;
++		}
+ 		if (b->surface != NULL && b->surface->gpuPool) {
++			gGPUStat.lv_pool++;
+ 			continue;                       /* topaz: GPU pool memory is write-combined: nothing in the cache */
+ 		}
+ 		if (b->surface != NULL) {
+ 			uint32_t seed = *(volatile uint32_t *) ((uint8_t *) b->surface->state->getBytesNoCopy() + 0xc);
+ 
+ 			if (seed == b->seed && !b->seen && began - b->pushed < again) {
++				gGPUStat.lv_skipped++;
+ 				continue;
+ 			}
++			gGPUStat.lv_pushed++;
++			gGPUStat.lv_pushed_bytes += b->size;
+ 			b->seed = seed;
+ 			b->pushed = began;
+ 		} else if (!b->seen || !gGPUCached) {
+@@ -1156,6 +1165,8 @@ RedwoodGPUUserClient::submit(struct msm_gem_submit * request)
+ 		    gGPUStat.waits, gGPUStat.waits ? waiting / NSEC_PER_USEC / gGPUStat.waits : 0, gGPUStat.over,
+ 		    gGPUStat.surfaces, gGPUStat.surfaces ? taking / NSEC_PER_USEC / gGPUStat.surfaces : 0, fBufferCount,
+ 		    fBufferBytes >> 20);
++		IOLog("RedwoodGPU: surfaces named %u (pool %u), pushed %u (%llu KB), skipped %u\n", gGPUStat.lv_named,
++		    gGPUStat.lv_pool, gGPUStat.lv_pushed, gGPUStat.lv_pushed_bytes >> 10, gGPUStat.lv_skipped);
+ 		bzero(&gGPUStat, sizeof(gGPUStat));
+ 	}
+ 	IOLockUnlock(gGPULock);
