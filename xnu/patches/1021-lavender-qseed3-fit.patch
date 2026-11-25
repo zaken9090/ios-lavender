@@ -1,0 +1,112 @@
+lavender: VIG0 QSEED3 scales direct frames (1125x2436) to the panel (1080x2340), as the copy path fits them
+
+- SweetFramebuffer.cpp: scaleSet() programs VIG0 source size and the QSEED3 phase steps; directPresent
+  fetches the whole GPU pool frame and scales it; any other scanFrom turns the scaler off; sweetfb_qseed=0: off
+- idea from the first lavender project (its 1028); made by xnu/src/mk_qseed.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 7a90e40..d0076ac 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -289,6 +289,9 @@ public:
+ 	void          showPending(const uint8_t *rec, SweetSurface **held);
+ 	bool          directEligible(const uint8_t *rec, SweetSurface **held);
+ 	void          scanFrom(uint64_t pa, uint32_t stride);
++	bool          fScaleOn;       /* lavender: VIG0's QSEED3 scales the presented size to the panel now */
++	bool          fScaleWant;     /* ... for the next scanFrom() (directPresent), else off (xnu/src/mk_qseed.py) */
++	void          scaleSet(bool on);
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+@@ -1046,12 +1049,62 @@ AppleCLCD::showPending(const uint8_t *rec, SweetSurface **heldIn)
+ 	}
+ }
+ 
++/*
++ * lavender: VIG0 fetches the whole presented picture (fLogicalW x fLogicalH) and its QSEED3 scaler
++ * (VIG0 + 0xa00: bilinear, no LUT) makes the panel's size of it; off: fetch a panel-sized window
++ * 1:1 as before. Latched with the next CTL flush (scanFrom). xnu/src/mk_qseed.py
++ */
++void
++AppleCLCD::scaleSet(bool on)
++{
++	if (fVig0 == NULL || on == fScaleOn) {
++		return;
++	}
++	volatile uint32_t *sc = fVig0 + 0xa00 / 4;
++	uint32_t sw = on ? fLogicalW : fWidth, sh = on ? fLogicalH : fHeight;
++	fVig0[0x00 / 4] = (sh << 16) | sw;              /* SSPP_SRC_SIZE */
++	fVig0[0x04 / 4] = (sh << 16) | sw;              /* SSPP_SRC_IMG_SIZE */
++	fVig0[0x08 / 4] = 0;                            /* SSPP_SRC_XY */
++	for (uint32_t off = 0; off <= 32; off += 16) {  /* pixel extension, planes 0, 1/2, 3: none, all rows fetched */
++		fVig0[(0x100 + off) / 4] = 0;
++		fVig0[(0x104 + off) / 4] = 0;
++		fVig0[(0x108 + off) / 4] = (sh << 16) | sw;
++	}
++	if (on) {
++		/* phase steps in 1.21 fixed point: source pixels per panel pixel (> 1: down) */
++		uint32_t stepx = (uint32_t)(((uint64_t)sw << 21) / fWidth), stepy = (uint32_t)(((uint64_t)sh << 21) / fHeight);
++		sc[0x0c / 4] = 0;                       /* PHASE_INIT */
++		sc[0x10 / 4] = stepx;                   /* PHASE_STEP_Y_H */
++		sc[0x14 / 4] = stepy;                   /* PHASE_STEP_Y_V */
++		sc[0x18 / 4] = stepx;                   /* PHASE_STEP_UV_H */
++		sc[0x1c / 4] = stepy;                   /* PHASE_STEP_UV_V */
++		sc[0x20 / 4] = 0x03040304;              /* PRELOAD */
++		sc[0x40 / 4] = (sh << 16) | sw;         /* SRC_SIZE_Y_RGB_A */
++		sc[0x44 / 4] = (sh << 16) | sw;         /* SRC_SIZE_UV */
++		sc[0x48 / 4] = (fHeight << 16) | fWidth;        /* DST_SIZE */
++		sc[0x04 / 4] = 1u | (1u << 14) | (3u << 16) | (3u << 24) | (1u << 31);  /* OP_MODE: on, bilinear */
++	} else {
++		sc[0x04 / 4] = 1u << 14;                /* OP_MODE: off */
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	if (on) {
++		static bool told;
++		if (!told) {
++			told = true;
++			IOLog("SWEET FB: VIG0 QSEED3 (version %#x) scales %ux%u to %ux%u\n", sc[0], sw, sh, fWidth, fHeight);
++		}
++	}
++	fScaleOn = on;
++}
++
+ void
+ AppleCLCD::scanFrom(uint64_t pa, uint32_t stride)
+ {
+ 	if (fVig0 == NULL || fCtl0 == NULL) {
+ 		return;         /* lavender: no MDP access */
+ 	}
++	scaleSet(fScaleWant);                   /* lavender: only a direct frame of the presented size is scaled */
++	fScaleWant = false;
+ 	fVig0[0x14 / 4] = (uint32_t)pa;
+ 	fVig0[0x24 / 4] = stride;
+ 	__asm__ volatile("dsb sy" ::: "memory");
+@@ -1376,8 +1429,19 @@ AppleCLCD::directPresent(const uint8_t *rec)
+ 			ox = (uint32_t)fOffX;
+ 			oy = (uint32_t)fOffY;
+ 		}
++		/* lavender: a GPU pool frame of the presented size is fetched whole and scaled (mk_qseed.py) */
++		static int qseed = -1;
++		if (qseed < 0) {
++			qseed = 1;
++			PE_parse_boot_argn("sweetfb_qseed", &qseed, sizeof(qseed));
++		}
++		bool scaled = qseed != 0 && sweet_fb_fit_on() && s->gpuPool && s->width == fLogicalW && s->height == fLogicalH &&
++		    (fLogicalW != fWidth || fLogicalH != fHeight);
++		if (scaled) {
++			ox = oy = 0;
++		}
+ 		uint64_t pa = s->scanoutPhys + s->offset + (uint64_t)oy * s->bytesPerRow + (uint64_t)ox * 4;
+-		if ((pa & 0xf) == 0 && pa + (uint64_t)fHeight * s->bytesPerRow < (1ull << 32)) {
++		if ((pa & 0xf) == 0 && pa + (uint64_t)(scaled ? fLogicalH : fHeight) * s->bytesPerRow < (1ull << 32)) {
+ 			uintptr_t va = s->kernelAddress();
+ 			if (va != 0) {
+ 				/*
+@@ -1387,6 +1451,7 @@ AppleCLCD::directPresent(const uint8_t *rec)
+ 				 */
+ 				if (s->gpuPool) {
+ 					/* GPU pool memory (write-combined): the MDP scans the surface itself, no copy */
++					fScaleWant = scaled;
+ 					scanFrom(pa, s->bytesPerRow);
+ 				} else if (fFlip[0] != NULL) {
+ 					flipFrom((const uint8_t *)(va + s->offset + (uint64_t)oy * s->bytesPerRow + (uint64_t)ox * 4),
