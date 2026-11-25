@@ -3,8 +3,8 @@ name: userland
 # lavender: the GPU user space for iOS 16 (arm64, iphoneos SDK) on a macOS runner:
 # Mesa 25.0.7 (softpipe + freedreno over redwood-drm) as libOSMesa.8.dylib, the EAGL stand-in
 # (eagl.c + gl_osmesa.c) as libtopaz-gl.dylib, the backboardd loader (topaz_inject.c) as
-# libtopaz-inject.dylib and the backboardd wrapper (bbd_wrap.c), for /topaz/lib and
-# /usr/libexec on the iOS root.
+# libtopaz-inject.dylib and the backboardd wrapper (bbd_wrap.c), for /usr/lib and
+# /usr/libexec on the iOS root (the kernel installs them: patch 1015, mkpayload.py --userland).
 #
 # Sources: the MakrSas/ios-topaz userland at the same pinned commit as the kernel (not copied into
 # this repo), plus userland/gpu/mkeagl.py and eagl_slots.txt of this repo (the generator of
@@ -43,6 +43,12 @@ jobs:
           mkdir -p work
           cp -R base/userland/. work/
           cp userland/gpu/* work/gpu/
+          # lavender installs into existing directories (the kernel writes the files, it makes no
+          # directories): libraries in /usr/lib, the real backboardd kept as /usr/sbin/backboardd
+          # (same file name: the process stays "backboardd")
+          sed -i '' -e 's#/topaz/lib/#/usr/lib/#g' -e 's#/topaz/backboardd.env#/usr/lib/topaz-backboardd.env#g' \
+            -e 's#/usr/libexec/real/backboardd#/usr/sbin/backboardd#g' work/gpu/*.c work/mesa/mk-mesa-mac.sh
+          grep -n "/usr/lib/\|/usr/sbin/" work/gpu/*.c work/mesa/mk-mesa-mac.sh | head -20
           ls -R work | head -40
 
       - name: Deps
@@ -71,10 +77,10 @@ jobs:
           M=build-mesa/out
           mkdir -p out
           python3 gpu/mkeagl.py gpu/eagl_slots.txt $M/gl.xml $M/exported-gl.txt gpu/eagl.c > gpu/eagl_gen.h
-          $CC -dynamiclib -install_name /topaz/lib/libtopaz-gl.dylib -Igpu \
+          $CC -dynamiclib -install_name /usr/lib/libtopaz-gl.dylib -Igpu \
             -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
             $M/libOSMesa.8.dylib -o out/libtopaz-gl.dylib gpu/eagl.c gpu/gl_osmesa.c
-          $CC -dynamiclib -install_name /topaz/lib/libtopaz-inject.dylib \
+          $CC -dynamiclib -install_name /usr/lib/libtopaz-inject.dylib \
             -framework CoreFoundation -framework IOKit -lobjc \
             -o out/libtopaz-inject.dylib gpu/topaz_inject.c
           $CC -o out/backboardd gpu/bbd_wrap.c
