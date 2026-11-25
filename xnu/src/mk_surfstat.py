@@ -108,7 +108,7 @@ sweet_surface_report(void)
 		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u %llu/%u(r%u)", by[i].name, by[i].pub >> 20,
 		    by[i].npub, by[i].held >> 20, by[i].nheld, by[i].refs);
 	}
-	IOLog("%s\n", line);
+	IOLog("%s\\n", line);
 }
 ''')
 sub('''void

@@ -25,10 +25,10 @@ index b40eccd..44da38d 100644
  	}
  }
 diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
-index e17297a..6ed75a9 100644
+index e17297a..552583d 100644
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -282,9 +282,80 @@ sweet_scanout_free_slot(int slot)
+@@ -282,9 +282,79 @@ sweet_scanout_free_slot(int slot)
  
  OSDefineMetaClassAndStructors(SweetSurface, OSObject);
  
@@ -87,8 +87,7 @@ index e17297a..6ed75a9 100644
 +		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u %llu/%u(r%u)", by[i].name, by[i].pub >> 20,
 +		    by[i].npub, by[i].held >> 20, by[i].nheld, by[i].refs);
 +	}
-+	IOLog("%s
-+", line);
++	IOLog("%s\n", line);
 +}
 +
  void
@@ -109,7 +108,7 @@ index e17297a..6ed75a9 100644
  	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
  		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
  	}
-@@ -422,6 +493,13 @@ sweet_surface_alloc(void)
+@@ -422,6 +492,13 @@ sweet_surface_alloc(void)
  		OSSafeReleaseNULL(s);
  		return NULL;
  	}
@@ -123,7 +122,7 @@ index e17297a..6ed75a9 100644
  	s->state = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
  	    kIODirectionInOut | kIOMemoryKernelUserShared, SWEET_UPAGE, SWEET_UPAGE);
  	if (s->state == NULL) {
-@@ -1114,6 +1192,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+@@ -1114,6 +1191,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
  			}
  		}
  	}
