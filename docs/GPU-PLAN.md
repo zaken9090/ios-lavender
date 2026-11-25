@@ -44,6 +44,11 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    their whole pixel buffers, 1.2 GB wired of 1.95 GB (CollectionsPoster 914 MB, PosterBoard 300+),
    so the UI paged code in from disk, throttled. 1019 keeps only the state page: wired 1700 -> 219 MB.
    Open: scrolling shows stale rows (CA draws only damage; first project's glpreserve), home 7 fps.
+   Display (2026-11-25): 1020 MDP shows GPU pool frames directly (frame ~11 ms after the tick, was
+   ~900 ms: CPU copy into the splash, seen as a slow top-to-bottom wipe); 1021 QSEED3 scales
+   1125x2436 to 1080x2340. **Scaling is NOT final (user, 2026-11-25): try other variants later** -
+   e.g. 750x1624 @2x upscaled (first project 1028), 828x1792 (1031), native panel size, other
+   QSEED3 filters/preload; pick by sharpness and fps.
    Earlier note - **Partial 2026-11-25**: GL draws the lock screen (FD512), but no unlock, frames 0.5-1.5 s late,
    then a hang. Plan (from a review of the user's first project, ios-lavender patches 1018-1036 and
    userland commits; each port asked for first):
