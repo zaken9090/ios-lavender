@@ -1,13 +1,13 @@
 lavender: touch (Novatek NT36672A in the panel TDDI)
 
-- bsd/dev/sweet_touch.c replaced: software I2C on GPIO 2/3 (no BLSP QUP or clocks), the
+- bsd/dev/sweet_touch.c replaced: software I2C on GPIO 2/3 (no BLSP QUP or clocks; register write with STOP, reads of <= 32 bytes), the
   chip at 0x01, event buffer window 0x21c00, reports read while GPIO 67 is low,
   fingers to sweet_hid_touch() in panel pixels
 - SweetHID: the panel is 2340 rows (touch to the presented 1125x2436 canvas)
 - boot-arg sweettouch=0 turns it off
 
 diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
-index 370d18b..0186430 100644
+index 370d18b..096aa06 100644
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
 @@ -1,11 +1,22 @@
@@ -32,7 +32,7 @@ index 370d18b..0186430 100644
 + *
 + * NT36672A protocol: the 256-byte window at register 0..0xff is selected by writing
 + * {0xff, addr >> 16, addr >> 8}; the event buffer is at 0x21c00. A report holds 10 slots of
-+ * 6 bytes from offset 1: id << 3 | state, x[11:4], y[11:4], x[3:0] << 4 | y[3:0], ...;
++ * 6 bytes from register 0: id << 3 | state, x[11:4], y[11:4], x[3:0] << 4 | y[3:0], ...;
 + * state 1 or 2 means the finger is down. Coordinates are panel pixels (1080 x 2340).
 + * Firmware info at offset 0x78/0x79: version and its complement.
 + *
@@ -178,8 +178,8 @@ index 370d18b..0186430 100644
 -	thread_block(THREAD_CONTINUE_NULL);
 +	pin_wr(pin, 4, 0);
 +	pin_wr(pin, 0, CFG_PULL_UP | CFG_DRIVE_2MA);
- }
- 
++}
++
 +static inline void
 +line_low(vm_offset_t pin)
 +{
@@ -196,8 +196,8 @@ index 370d18b..0186430 100644
 +line_high(vm_offset_t pin)
 +{
 +	return (pin_rd(pin, 4) & IO_IN) != 0;
-+}
-+
+ }
+ 
 +/* Release SCL and wait for it (the chip may stretch the clock). */
  static bool
 -touch_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
@@ -212,7 +212,7 @@ index 370d18b..0186430 100644
  			return true;
  		}
  		delay(1);
-@@ -134,634 +112,257 @@ touch_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
+@@ -134,634 +112,279 @@ touch_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
  	return false;
  }
  
@@ -423,7 +423,10 @@ index 370d18b..0186430 100644
 -			touch_wr(st.se, SE_TX, word);
 -			st.sent = nt;
 -			touch_wr(st.se, SE_TX_WM, 0);
--		}
++	for (unsigned i = 0; !error && i < len; i++) {
++		if (!i2c_write_byte(buf[i])) {
++			error = EIO;
+ 		}
 -		uint32_t count = touch_rd(st.se, SE_RX_COUNT) & 0x1ffffffu;
 -		if (count > 64 || count > (nr - st.got + 3u) / 4u) {
 -			err = EIO;
@@ -434,10 +437,7 @@ index 370d18b..0186430 100644
 -			for (unsigned j = 0; j < 4 && st.got < nr; ++j) {
 -				rx[st.got++] = (uint8_t)(word >> (8u * j));
 -			}
-+	for (unsigned i = 0; !error && i < len; i++) {
-+		if (!i2c_write_byte(buf[i])) {
-+			error = EIO;
- 		}
+-		}
 -		/* DONE is checked after draining RX, so final short words aren't lost. */
 -		if (irq & SE_DONE) {
 -			/* Re-sample after the final drain; a late error must beat DONE. */
@@ -462,11 +462,11 @@ index 370d18b..0186430 100644
 +	return error;
  }
  
-+/* Register reg of addr, then len bytes (repeated start). */
++/* len bytes from addr (current register pointer). */
  static int
 -touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
 -    unsigned nr, bool stretch)
-+i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
++i2c_read_raw(uint8_t addr, uint8_t *buf, unsigned len)
  {
 -	st.irq_status = st.irq_last = 0;
 -	st.sent = st.got = 0;
@@ -491,10 +491,8 @@ index 370d18b..0186430 100644
 -	    NULL, 0, true);
 -	if (err) {
 -		return err;
-+	if (!i2c_write_byte((uint8_t)(addr << 1)) || !i2c_write_byte(reg)) {
++	if (!i2c_write_byte((uint8_t)(addr << 1 | 1))) {
 +		error = ENXIO;
-+	} else if (!i2c_start() || !i2c_write_byte((uint8_t)(addr << 1 | 1))) {
-+		error = EIO;
 +	} else {
 +		for (unsigned i = 0; i < len; i++) {
 +			buf[i] = i2c_read_byte(i + 1 < len);
@@ -516,11 +514,14 @@ index 370d18b..0186430 100644
 -/* Raw read only: 0x8240 is the vendor's generic/older VERSION candidate,
 - * not a second accepted GT9896 identity. Never try a four-byte Berlin pointer:
 - * on this 16-bit IC the extra bytes would be register data writes. */
--static int
++/*
++ * Register reg of addr, then len bytes: the register byte is written in its own transfer (STOP),
++ * then read in pieces of at most 32 bytes, each after setting the register again - the way the
++ * first lavender port read this chip successfully (one long repeated-start read returned 0xff).
++ */
+ static int
 -touch_probe_info(uint16_t reg, uint8_t *buf)
-+/* Nine clocks with SDA released free a slave that was left mid-byte, then a stop. */
-+static void
-+i2c_recover(void)
++i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
  {
 -	memset(buf, 0xa5, 32);
 -	int err = touch_read(0x5d, reg, true, buf, 32);
@@ -533,31 +534,43 @@ index 370d18b..0186430 100644
 -				(void)snprintf(line + j * 3u, 4, "%02x ", buf[off + j]);
 -			}
 -			printf("SWEET TOUCH: probe raw %#x: %s\n", reg + off, line);
--		}
++	while (len) {
++		unsigned n = len > 32 ? 32 : len;
++		int error = i2c_write(addr, &reg, 1);
++		if (!error) {
++			error = i2c_read_raw(addr, buf, n);
+ 		}
++		if (error) {
++			return error;
++		}
++		reg = (uint8_t)(reg + n);
++		buf += n;
++		len -= n;
+ 	}
+-	return err;
++	return 0;
+ }
+ 
+-static unsigned
+-touch_be16(const uint8_t *p)
++/* Nine clocks with SDA released free a slave that was left mid-byte, then a stop. */
++static void
++i2c_recover(void)
+ {
+-	return ((unsigned)p[0] << 8) | p[1];
 +	line_release(lt.sda);
 +	for (int i = 0; i < 9 && !line_high(lt.sda); i++) {
 +		line_low(lt.scl);
 +		delay(HALF_US);
 +		(void)scl_up();
- 	}
--	return err;
++	}
 +	i2c_stop();
- }
- 
--static unsigned
--touch_be16(const uint8_t *p)
-+static int
-+nvt_set_window(uint32_t addr)
- {
--	return ((unsigned)p[0] << 8) | p[1];
-+	const uint8_t cmd[3] = { 0xff, (uint8_t)(addr >> 16), (uint8_t)(addr >> 8) };
-+	return i2c_write(NVT_ADDR, cmd, sizeof(cmd));
  }
  
 -static bool
 -touch_checksum(const uint8_t *buf, unsigned len)
-+static void
-+touch_sleep_ms(unsigned ms)
++static int
++nvt_set_window(uint32_t addr)
  {
 -	if (len < 2) {
 -		return false;
@@ -567,16 +580,13 @@ index 370d18b..0186430 100644
 -		sum += buf[i];
 -	}
 -	return (sum & 0xffffu) == touch_be16(buf + len - 2);
-+	static int chan;
-+	uint64_t deadline;
-+	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
-+	(void)assert_wait_deadline(&chan, THREAD_UNINT, deadline);
-+	thread_block(THREAD_CONTINUE_NULL);
++	const uint8_t cmd[3] = { 0xff, (uint8_t)(addr >> 16), (uint8_t)(addr >> 8) };
++	return i2c_write(NVT_ADDR, cmd, sizeof(cmd));
  }
  
  static void
 -touch_report(uint32_t mask, const int *x, const int *y)
-+touch_report(const uint8_t *r)
++touch_sleep_ms(unsigned ms)
  {
 -	for (unsigned id = 0; id < TOUCH_MAX; ++id) {
 -		uint32_t bit = 1u << id;
@@ -595,13 +605,18 @@ index 370d18b..0186430 100644
 -		}
 -	}
 -	st.active = mask;
--}
-+	bool now[NVT_FINGERS] = { false };
-+	int nx[NVT_FINGERS], ny[NVT_FINGERS];
++	static int chan;
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
+ }
  
 -static int
 -touch_goodix(void)
--{
++static void
++touch_report(const uint8_t *r)
+ {
 -	uint8_t buf[90];
 -	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
 -	uint32_t mask = 0;
@@ -629,8 +644,11 @@ index 370d18b..0186430 100644
 -		    buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u);
 -		if (err) {
 -			return err;
++	bool now[NVT_FINGERS] = { false };
++	int nx[NVT_FINGERS], ny[NVT_FINGERS];
++
 +	for (unsigned i = 0; i < NVT_FINGERS; i++) {
-+		const uint8_t *p = r + 1 + 6 * i;
++		const uint8_t *p = r + 6 * i;
 +		unsigned id = p[0] >> 3, state = p[0] & 7;
 +		if (id == 0 || id > NVT_FINGERS || (state != 1 && state != 2)) {
 +			continue;
@@ -738,7 +756,7 @@ index 370d18b..0186430 100644
 -		}
 -		if (event == 3u) {
 -			continue; /* topaz: "no event" slot (TopazTouch) */
-+	uint8_t r[NVT_REPORT_LEN + 1];
++	uint8_t r[NVT_REPORT_LEN];
 +	uint8_t info[2];
 +	int error = EIO;
 +
@@ -764,7 +782,7 @@ index 370d18b..0186430 100644
 -		x[id] = (int)px;
 -		y[id] = (int)py;
 -		++active;
--	}
+ 	}
 -	(void)active;   /* topaz: byte 2 does not always match the records */
 -	touch_report(mask, x, y);
 -	return 0;
@@ -787,7 +805,7 @@ index 370d18b..0186430 100644
 -	    ((tx >> 16) & 0x3fu) < 2u || ((rx >> 16) & 0x3fu) < 2u) {
 -		printf("SWEET TOUCH: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped\n");
 -		return false;
- 	}
+-	}
 -	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
 -		printf("SWEET TOUCH: SE2 already busy; probes skipped\n");
 -		return false;
@@ -952,7 +970,7 @@ index 370d18b..0186430 100644
 +	for (;;) {
 +		/* A report waits while the line is low; after the last finger lifts, read once more. */
 +		if (!line_high(lt.irq) || any_down) {
-+			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN + 1) == 0) {
++			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
 +				lt.reports++;
 +				touch_report(r);
 +			} else if (++lt.errors <= 10) {
@@ -1023,19 +1041,3 @@ index 370d18b..0186430 100644
  	}
  }
  #endif /* ARM64_BOARD_CONFIG_SWEET */
-diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
-index d2f4fa1..40ad760 100644
---- a/iokit/Kernel/arm/hid/SweetHID.cpp
-+++ b/iokit/Kernel/arm/hid/SweetHID.cpp
-@@ -435,9 +435,9 @@ SweetHIDTouch::start(IOService *provider)
- 	int native = 0;
- 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
- 	fLogicalW = native ? 1080 : 1125;
--	fLogicalH = native ? 2400 : 2436;
-+	fLogicalH = native ? 2340 : 2436;               /* lavender: 2340-row panel */
- 	fOffX = ((fLogicalW - 1080) / 2) & ~3;           /* as SweetFramebuffer.cpp */
--	fOffY = (fLogicalH - 2400) / 2;
-+	fOffY = (fLogicalH - 2340) / 2;
- 	/* The digitizer covers the main display (backboardd maps it 1:1). */
- 	setProperty("DisplayIntegrated", kOSBooleanTrue);
- 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */

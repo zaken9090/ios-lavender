@@ -12,7 +12,7 @@
  *
  * NT36672A protocol: the 256-byte window at register 0..0xff is selected by writing
  * {0xff, addr >> 16, addr >> 8}; the event buffer is at 0x21c00. A report holds 10 slots of
- * 6 bytes from offset 1: id << 3 | state, x[11:4], y[11:4], x[3:0] << 4 | y[3:0], ...;
+ * 6 bytes from register 0: id << 3 | state, x[11:4], y[11:4], x[3:0] << 4 | y[3:0], ...;
  * state 1 or 2 means the finger is down. Coordinates are panel pixels (1080 x 2340).
  * Firmware info at offset 0x78/0x79: version and its complement.
  *
@@ -205,18 +205,16 @@ i2c_write(uint8_t addr, const uint8_t *buf, unsigned len)
 	return error;
 }
 
-/* Register reg of addr, then len bytes (repeated start). */
+/* len bytes from addr (current register pointer). */
 static int
-i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
+i2c_read_raw(uint8_t addr, uint8_t *buf, unsigned len)
 {
 	int error = 0;
 	if (!i2c_start()) {
 		return EBUSY;
 	}
-	if (!i2c_write_byte((uint8_t)(addr << 1)) || !i2c_write_byte(reg)) {
+	if (!i2c_write_byte((uint8_t)(addr << 1 | 1))) {
 		error = ENXIO;
-	} else if (!i2c_start() || !i2c_write_byte((uint8_t)(addr << 1 | 1))) {
-		error = EIO;
 	} else {
 		for (unsigned i = 0; i < len; i++) {
 			buf[i] = i2c_read_byte(i + 1 < len);
@@ -224,6 +222,30 @@ i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
 	}
 	i2c_stop();
 	return error;
+}
+
+/*
+ * Register reg of addr, then len bytes: the register byte is written in its own transfer (STOP),
+ * then read in pieces of at most 32 bytes, each after setting the register again - the way the
+ * first lavender port read this chip successfully (one long repeated-start read returned 0xff).
+ */
+static int
+i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len)
+{
+	while (len) {
+		unsigned n = len > 32 ? 32 : len;
+		int error = i2c_write(addr, &reg, 1);
+		if (!error) {
+			error = i2c_read_raw(addr, buf, n);
+		}
+		if (error) {
+			return error;
+		}
+		reg = (uint8_t)(reg + n);
+		buf += n;
+		len -= n;
+	}
+	return 0;
 }
 
 /* Nine clocks with SDA released free a slave that was left mid-byte, then a stop. */
@@ -263,7 +285,7 @@ touch_report(const uint8_t *r)
 	int nx[NVT_FINGERS], ny[NVT_FINGERS];
 
 	for (unsigned i = 0; i < NVT_FINGERS; i++) {
-		const uint8_t *p = r + 1 + 6 * i;
+		const uint8_t *p = r + 6 * i;
 		unsigned id = p[0] >> 3, state = p[0] & 7;
 		if (id == 0 || id > NVT_FINGERS || (state != 1 && state != 2)) {
 			continue;
@@ -292,7 +314,7 @@ touch_report(const uint8_t *r)
 static void
 touch_thread(void *arg __unused, wait_result_t wr __unused)
 {
-	uint8_t r[NVT_REPORT_LEN + 1];
+	uint8_t r[NVT_REPORT_LEN];
 	uint8_t info[2];
 	int error = EIO;
 
@@ -319,7 +341,7 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
 	for (;;) {
 		/* A report waits while the line is low; after the last finger lifts, read once more. */
 		if (!line_high(lt.irq) || any_down) {
-			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN + 1) == 0) {
+			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
 				lt.reports++;
 				touch_report(r);
 			} else if (++lt.errors <= 10) {

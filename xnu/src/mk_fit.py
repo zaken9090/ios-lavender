@@ -139,12 +139,12 @@ edit('bsd/dev/sweet_touch.c', [
 } lt;''', '''	uint64_t reports, errors;
 	int diag;                       /* boot-arg sweettouchdiag: log the first N reports, then every 200th */
 } lt;'''),
-    ('''			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN + 1) == 0) {
-				lt.reports++;''', '''			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN + 1) == 0) {
+    ('''			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
+				lt.reports++;''', '''			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
 				lt.reports++;
 				if ((int64_t)lt.reports <= lt.diag || (lt.diag && lt.reports % 200 == 0)) {
 					printf("SWEET TOUCH: report %llu: %02x %02x %02x %02x %02x %02x | %02x %02x %02x %02x %02x %02x\\n",
-					    lt.reports, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12]);
+					    lt.reports, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
 				}'''),
     ('''	PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));''',
      '''	PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
