@@ -1,0 +1,38 @@
+lavender: frames shown by pointing the MDP (VIG0/CTL0) at GPU pool surfaces, not copied by the CPU
+
+- SweetFramebuffer.cpp: map SDM660 MDP5 VIG0 0xc905000 and CTL0 0xc902000 when VIG0 scans the splash;
+  the base direct path then scans backboardd's pool surfaces (no slow top-to-bottom copy); sweetfb_mdp=0: off
+- idea from the first lavender project (its 0995); made by xnu/src/mk_mdp.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index d83998b..7a90e40 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -439,6 +439,27 @@ AppleCLCD::start(IOService *provider)
+ 	 */
+ 	fVig0 = NULL;
+ 	fCtl0 = NULL;
++	{
++		/*
++		 * lavender: SDM660 MDP5 - VIG0 (0xc905000) scans the splash on CTL0 (0xc902000), registers
++		 * as on topaz's DPU: one GPU pool surface is shown by pointing VIG0 at it (xnu/src/mk_mdp.py).
++		 * Only if VIG0 still scans the splash; boot-arg sweetfb_mdp=0: the CPU copies every frame.
++		 */
++		uint32_t mdp = 1;
++		PE_parse_boot_argn("sweetfb_mdp", &mdp, sizeof(mdp));
++		if (mdp) {
++			volatile uint32_t *vig0 = (volatile uint32_t *)ml_io_map(0x0c905000, 0x1000);
++			volatile uint32_t *ctl0 = (volatile uint32_t *)ml_io_map(0x0c902000, 0x1000);
++			uint32_t src = vig0 != NULL ? vig0[0x14 / 4] : 0;
++			if (vig0 != NULL && ctl0 != NULL && src == 0x9d400000u) {
++				fVig0 = vig0;
++				fCtl0 = ctl0;
++			}
++			IOLog("SWEET FB: lavender MDP VIG0 src %#x stride %u ctl0 flush %#x -> %s\n", src,
++			    vig0 != NULL ? vig0[0x24 / 4] : 0, ctl0 != NULL ? ctl0[0x18 / 4] : 0,
++			    fVig0 != NULL ? "direct frames" : "left alone, frames copied");
++		}
++	}
+ 	topaz_adreno_init();
+ 	setProperty("RedwoodWaitsForGPU", true);         /* present() waits for the GPU (eagl.c reads it) */
+ 	fDsi = NULL;    /* lavender: no SM6225 DSI controller */
