@@ -175,6 +175,9 @@ def main():
             wake()
             m = rd.mark()
             cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
+            # CommCenter runs with no modem behind it (xnu 1038): iOS shows "Cellular Issue Detected"
+            # once after unlock. OK is at (736, 1373); an empty spot of the home screen otherwise.
+            cmd(phone, "lv:tap 736 1373", 1.5)
             shot = screenshot(phone, rd, None)
             if b"SWEET FPS" in rd.since(m) and shot and is_home(shot):
                 home = True
