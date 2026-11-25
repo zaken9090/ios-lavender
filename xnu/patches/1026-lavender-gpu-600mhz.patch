@@ -1,0 +1,38 @@
+lavender: boot-arg lv_gpu_mhz=600 - Adreno core at 600 MHz (GPLL0 / 1) on GX rail level 0x180
+
+- TopazRpm.cpp: with lv_gpu_mhz=600 vote smpb3 vlvl 0x180, then gfx3d RCG divider 1; default 300 MHz
+- made by xnu/src/mk_gpu600.py
+
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index 9a45bbf..ac362cf 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -467,13 +467,27 @@ lavender_gpu_probe(uint32_t level)
+ 	 * Levels per gfx corner 0x40 0x40 0x80 0xc0 0x100 0x140 0x180; 300 MHz = corner 3 = 0x80 (SVS).
+ 	 * Without it the GX GDSC never reports PWR_ON and unclamping it stops the display (and touch).
+ 	 */
+-	uint32_t lvl = 0x80;
++	uint32_t lvl = 0x80, mhz = 300;
++	/* lavender: lv_gpu_mhz=600 - GPLL0 / 1 on rail level 0x180 (gfx corner 7, good to 647 MHz); mk_gpu600.py */
++	PE_parse_boot_argn("lv_gpu_mhz", &mhz, sizeof(mhz));
++	if (mhz >= 600) {
++		lvl = 0x180;
++	}
+ 	PE_parse_boot_argn("lv_gfx_lvl", &lvl, sizeof(lvl));
+ 	if (lvl) {
+ 		bool en = topaz_rpm_write(0, 0x62706d73u /* smpb */, 3, 0x6e657773u /* swen */, 1);
+ 		bool lv = topaz_rpm_write(0, 0x62706d73u, 3, 0x6c766c76u /* vlvl */, lvl);
+ 		LOG("LVGPU GX rail smpb3 swen %s vlvl %#x %s", en ? "acked" : "FAILED", lvl, lv ? "acked" : "FAILED");
+ 		IODelay(2000);
++		if (mhz >= 600 && en && lv && lvl >= 0x180) {
++			IODelay(3000);                                  /* the rail settles before the clock goes up */
++			lv_w(lv_gpucc, 0x1074, (5u << 8) | 1u);         /* GPLL0 / 1 = 600 MHz */
++			lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
++			for (int i = 0; i < 200 && (lv_r(lv_gpucc, 0x1070) & 1u); i++) {
++				IODelay(10);
++			}
++			LOG("LVGPU gfx3d 600 MHz: rcg cmd %#x cfg %#x", lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074));
++		}
+ 	}
+ 
+ 	/* GFX LDO block (DT msm_gfx_ldo 0x506e000, BHS mode: all corners have allow-ldo-mode 0): read only */
