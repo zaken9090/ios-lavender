@@ -1,0 +1,108 @@
+lavender: built-in AppleIPAppender service for CommCenter (ApplePDPHelper)
+
+- SweetWatchdog.cpp: AppleIPAppender + user client, every call accepted and answered with zeroes;
+  IOWatchdog::start() makes it
+- made by xnu/src/mk_ipappender.py
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 8f53742..00271f5 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -40,6 +40,82 @@ IOWatchdog::setProperties(__unused OSObject *properties)
+ 	return kIOReturnSuccess;
+ }
+ 
++/*
++ * lavender: AppleIPAppender (xnu/src/mk_ipappender.py). CommCenter's ApplePDPHelper opens it;
++ * no baseband data interfaces here, so every call is accepted and answered with zeroes.
++ */
++class AppleIPAppender : public IOService {
++	OSDeclareDefaultStructors(AppleIPAppender);
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleIPAppender, IOService);
++
++bool
++AppleIPAppender::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty(kIOUserClientClassKey, "AppleIPAppenderUserClient");
++	registerService();
++	IOLog("LV PDP: AppleIPAppender registered (accepts calls, no data interfaces)\n");
++	return true;
++}
++
++class AppleIPAppenderUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(AppleIPAppenderUserClient);
++
++public:
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target,
++	    void *reference) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleIPAppenderUserClient, IOUserClient);
++
++IOReturn
++AppleIPAppenderUserClient::clientClose(void)
++{
++	terminate();
++	return kIOReturnSuccess;
++}
++
++static uint64_t lv_pdp_logged;          /* selectors already logged (< 64) */
++
++IOReturn
++AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
++    __unused void *reference)
++{
++	for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
++		args->scalarOutput[i] = 0;
++	}
++	if (args->structureOutputDescriptor != NULL) {
++		IOByteCount len = args->structureOutputDescriptor->getLength();
++		for (IOByteCount off = 0; off < len; off += 8) {
++			static const uint64_t zero = 0;
++			args->structureOutputDescriptor->writeBytes(off, &zero, len - off < 8 ? len - off : 8);
++		}
++	} else if (args->structureOutput != NULL) {
++		bzero(args->structureOutput, args->structureOutputSize);
++	}
++	if (selector >= 64 || !(lv_pdp_logged & (1ULL << selector))) {
++		if (selector < 64) {
++			lv_pdp_logged |= 1ULL << selector;
++		}
++		char name[32];
++		proc_selfname(name, sizeof(name));
++		IOLog("LV PDP: %s sel %u in %u/%u out %u/%u -> ok\n", name, selector,
++		    args->scalarInputCount, args->structureInputSize,
++		    args->scalarOutputCount, args->structureOutputSize);
++	}
++	return kIOReturnSuccess;
++}
++
+ bool
+ IOWatchdog::start(IOService *provider)
+ {
+@@ -50,6 +126,14 @@ IOWatchdog::start(IOService *provider)
+ 	setProperty("IOPMUPrimary", 1ULL, 32);
+ 	registerService();
+ 	IOLog("SWEET WDT: IOWatchdog registered (accepts check-ins, never fires)\n");
++	/* lavender: CommCenter's PDP helper service next to it (mk_ipappender.py) */
++	AppleIPAppender *pdp = OSTypeAlloc(AppleIPAppender);
++	if (pdp != NULL) {
++		if (!pdp->init() || !pdp->attach(provider) || !pdp->start(provider)) {
++			IOLog("LV PDP: AppleIPAppender did not start\n");
++		}
++		pdp->release();
++	}
+ 	return true;
+ }
+ 
