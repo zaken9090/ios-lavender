@@ -1,0 +1,19 @@
+lavender: sweetscan lists heap strings of a killed process too (signal 9)
+
+- exception.c sweet_crash_log()
+- made by xnu/src/mk_scan9.py
+
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 7c0510d..3ed464c 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -893,6 +893,9 @@ sweet_crash_log(const char *name, int pid, int sig, uint64_t code, uint64_t subc
+ 		}
+ 		vm_map_unlock_read(map);
+ 	}
++	if (sig == 9) {
++		sweet_crash_strings(name);      /* lavender: a killed process too (xnu/src/mk_scan9.py) */
++	}
+ 	if (sig == 6 || sig == 5) {
+ 		sweet_crash_strings(name);
+ 		/* lavender: main-binary addresses left on the stack (xnu/src/mk_crashscan.py) */
