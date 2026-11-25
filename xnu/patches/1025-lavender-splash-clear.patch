@@ -1,0 +1,27 @@
+lavender: the splash buffer is cleared once direct frames are shown (no kernel text between iOS pictures)
+
+- SweetFramebuffer.cpp directPresent: the second direct frame blanks the splash (console muted by then)
+- made by xnu/src/mk_splashclear.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 02aa32f..c6cf670 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1453,6 +1453,17 @@ AppleCLCD::directPresent(const uint8_t *rec)
+ 					/* GPU pool memory (write-combined): the MDP scans the surface itself, no copy */
+ 					fScaleWant = scaled;
+ 					scanFrom(pa, s->bytesPerRow);
++					/* lavender: no console text left in the splash for when VIG0 returns to it (mk_splashclear.py) */
++					static uint32_t direct_frames;
++					if (++direct_frames == 2 && sweet_console_muted && fPixels != 0) {
++						for (uint32_t y = 0; y < fHeight; y++) {
++							/* (plain stores: the panel memory is not the kernel's RAM, no bzero/dc zva there) */
++							volatile uint32_t *row = (volatile uint32_t *)(fPixels + (uint64_t)y * fRowBytes);
++							for (uint32_t x = 0; x < fWidth; x++) {
++								row[x] = 0;
++							}
++						}
++					}
+ 				} else if (fFlip[0] != NULL) {
+ 					flipFrom((const uint8_t *)(va + s->offset + (uint64_t)oy * s->bytesPerRow + (uint64_t)ox * 4),
+ 					    s->bytesPerRow);
