@@ -144,41 +144,10 @@ a5_kick_wait(const char *what)
 	return false;
 }
 
+/* Linux a5xx_hw_init, the A512 branches (also called by the RedwoodGPU driver, patch 1014) */
 static void
-lavender_gpu_cp(void)
+a5_hw_init(void)
 {
-	uint64_t fwpa = 0, mem = 0x95400000ull;
-	PE_parse_boot_argn("lv_fwpa", &fwpa, sizeof(fwpa));
-	PE_parse_boot_argn("lv_gpumem", &mem, sizeof(mem));
-	const volatile uint8_t *ar = fwpa ? (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x40000) : NULL;
-	uint32_t pm4_size = 0, pfp_size = 0;
-	const uint8_t *pm4 = ar ? lv_fw_find(ar, "a530_pm4.fw", &pm4_size) : NULL;
-	const uint8_t *pfp = ar ? lv_fw_find(ar, "a530_pfp.fw", &pfp_size) : NULL;
-	if (pm4 == NULL || pfp == NULL || pm4_size < 8 || pfp_size < 8 || pm4_size > 0x8004 || pfp_size > 0x8004) {
-		LOG("LVCP microcode missing (pm4 %u, pfp %u)", pm4_size, pfp_size);
-		return;
-	}
-	volatile uint8_t *m = (volatile uint8_t *)ml_io_map(mem, 0x20000);
-	if (m == NULL) {
-		LOG("LVCP map of %#llx failed", mem);
-		return;
-	}
-	for (uint32_t i = 0; i < 0x20000; i += 4) {
-		*(volatile uint32_t *)(m + i) = 0;
-	}
-	for (uint32_t i = 4; i < pm4_size; i++) {
-		m[i - 4] = pm4[i];
-	}
-	for (uint32_t i = 4; i < pfp_size; i++) {
-		m[0x8000 + i - 4] = pfp[i];
-	}
-	a5_ring = (volatile uint32_t *)(m + 0x10000);
-	volatile uint32_t *fence = (volatile uint32_t *)(m + 0x18000);
-	uint64_t pm4_pa = mem, pfp_pa = mem + 0x8000, ring_pa = mem + 0x10000, fence_pa = mem + 0x18000;
-	LOG("LVCP pm4 %u pfp %u bytes (versions %#x %#x), ring %#llx, fence %#llx", pm4_size - 4, pfp_size - 4,
-	    *(const uint32_t *)(pm4 + 4), *(const uint32_t *)(pfp + 4), ring_pa, fence_pa);
-
-	/* a5xx_hw_init, A512 */
 	g_w(A5_VBIF_ROUND_ROBIN_QOS_ARB, 0x3);
 	g_w(A5_VBIF_GATE_OFF_WRREQ_EN, 0x9);
 	g_w(A5_RBBM_PERFCTR_GPU_BUSY_MASKED, 0xFFFFFFFF);
@@ -232,6 +201,43 @@ lavender_gpu_cp(void)
 	g_rmw(A5_HLSQ_DBG_ECO_CNTL, 1u << 18, 0);
 	LOG("LVCP hw_init written: RBBM_STATUS %#x HW_FAULT %#x INT0 %#x", g_r(A5_RBBM_STATUS), g_r(A5_CP_HW_FAULT),
 	    g_r(A5_RBBM_INT_0_STATUS));
+}
+
+static void
+lavender_gpu_cp(void)
+{
+	uint64_t fwpa = 0, mem = 0x95400000ull;
+	PE_parse_boot_argn("lv_fwpa", &fwpa, sizeof(fwpa));
+	PE_parse_boot_argn("lv_gpumem", &mem, sizeof(mem));
+	const volatile uint8_t *ar = fwpa ? (const volatile uint8_t *)ml_io_map_wcomb(fwpa, 0x40000) : NULL;
+	uint32_t pm4_size = 0, pfp_size = 0;
+	const uint8_t *pm4 = ar ? lv_fw_find(ar, "a530_pm4.fw", &pm4_size) : NULL;
+	const uint8_t *pfp = ar ? lv_fw_find(ar, "a530_pfp.fw", &pfp_size) : NULL;
+	if (pm4 == NULL || pfp == NULL || pm4_size < 8 || pfp_size < 8 || pm4_size > 0x8004 || pfp_size > 0x8004) {
+		LOG("LVCP microcode missing (pm4 %u, pfp %u)", pm4_size, pfp_size);
+		return;
+	}
+	volatile uint8_t *m = (volatile uint8_t *)ml_io_map(mem, 0x20000);
+	if (m == NULL) {
+		LOG("LVCP map of %#llx failed", mem);
+		return;
+	}
+	for (uint32_t i = 0; i < 0x20000; i += 4) {
+		*(volatile uint32_t *)(m + i) = 0;
+	}
+	for (uint32_t i = 4; i < pm4_size; i++) {
+		m[i - 4] = pm4[i];
+	}
+	for (uint32_t i = 4; i < pfp_size; i++) {
+		m[0x8000 + i - 4] = pfp[i];
+	}
+	a5_ring = (volatile uint32_t *)(m + 0x10000);
+	volatile uint32_t *fence = (volatile uint32_t *)(m + 0x18000);
+	uint64_t pm4_pa = mem, pfp_pa = mem + 0x8000, ring_pa = mem + 0x10000, fence_pa = mem + 0x18000;
+	LOG("LVCP pm4 %u pfp %u bytes (versions %#x %#x), ring %#llx, fence %#llx", pm4_size - 4, pfp_size - 4,
+	    *(const uint32_t *)(pm4 + 4), *(const uint32_t *)(pfp + 4), ring_pa, fence_pa);
+
+	a5_hw_init();
 
 	g_w64(A5_CP_ME_INSTR_BASE_LO, pm4_pa);
 	g_w64(A5_CP_PFP_INSTR_BASE_LO, pfp_pa);
