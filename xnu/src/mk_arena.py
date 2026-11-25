@@ -7,7 +7,7 @@ eagl copies them into textures: glTexImage2D was the most expensive GL call of a
 stayed at ~24 fps whatever the GPU clock or the vsync rate (2026-11-25).
 
 At IOCoreSurfaceRoot start, while RAM is still whole, chunks of 32 MB of contiguous kernel memory
-are set aside (256 MB with gpu=1; sweetsurf_arena=0: none). Surfaces the GPU can take as they are
+are set aside (boot-arg sweetsurf_arena=MB; none by default: measured, hardly used). Surfaces the GPU can take as they are
 (4 bytes a pixel, one plane, rows 64-byte aligned, 64 KB or more) are cut from them in 16 KB
 units, with the 64 guard rows, as IOSubMemoryDescriptors of the chunk. A part freed while
 something still holds its descriptor (a mapping, a GPU buffer) waits until only the arena does.
@@ -100,9 +100,11 @@ sweet_arena_fill(void)
 		return;
 	}
 	filled = true;
-	if (PE_parse_boot_argn("gpu", &gpu, sizeof(gpu)) && gpu != 0) {
-		mb = 256;
-	}
+	/*
+	 * Off by default (measured 2026-11-25: at most 12 MB used, fps unchanged): applications' layers
+	 * are mostly surfaces around their own memory (wrapped), which no arena can hold. sweetsurf_arena=MB.
+	 */
+	(void)gpu;
 	PE_parse_boot_argn("sweetsurf_arena", &mb, sizeof(mb));
 	unsigned want = mb / (SWEET_ARENA_CHUNK >> 20), n = 0;
 	if (want > SWEET_ARENA_MAX) {

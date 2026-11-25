@@ -1,11 +1,11 @@
-lavender: contiguous arena for GPU-shareable IOSurfaces (sweetsurf_arena=MB, 256 with gpu=1)
+lavender: contiguous arena for GPU-shareable IOSurfaces (sweetsurf_arena=MB, off by default)
 
 - SweetSurface: 32 MB contiguous chunks taken at IOCoreSurfaceRoot start; BGRA surfaces with 64-byte rows are
   parts of them (IOSubMemoryDescriptor), so the GPU reads them in place instead of eagl copying them
 - idea from the first lavender project (its 1018/1019); made by xnu/src/mk_arena.py
 
 diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
-index 49a5ea3..b7446c3 100644
+index 49a5ea3..ee705eb 100644
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
 @@ -37,6 +37,7 @@
@@ -16,7 +16,7 @@ index 49a5ea3..b7446c3 100644
  #include <IOKit/system.h>
  #include <pexpert/pexpert.h>
  #include <libkern/c++/OSArray.h>
-@@ -280,6 +281,167 @@ sweet_scanout_free_slot(int slot)
+@@ -280,6 +281,169 @@ sweet_scanout_free_slot(int slot)
  	IOLockUnlock(sweet_surface_lock);
  }
  
@@ -66,9 +66,11 @@ index 49a5ea3..b7446c3 100644
 +		return;
 +	}
 +	filled = true;
-+	if (PE_parse_boot_argn("gpu", &gpu, sizeof(gpu)) && gpu != 0) {
-+		mb = 256;
-+	}
++	/*
++	 * Off by default (measured 2026-11-25: at most 12 MB used, fps unchanged): applications' layers
++	 * are mostly surfaces around their own memory (wrapped), which no arena can hold. sweetsurf_arena=MB.
++	 */
++	(void)gpu;
 +	PE_parse_boot_argn("sweetsurf_arena", &mb, sizeof(mb));
 +	unsigned want = mb / (SWEET_ARENA_CHUNK >> 20), n = 0;
 +	if (want > SWEET_ARENA_MAX) {
@@ -184,7 +186,7 @@ index 49a5ea3..b7446c3 100644
  OSDefineMetaClassAndStructors(SweetSurface, OSObject);
  
  /*
-@@ -332,7 +494,9 @@ sweet_surface_report(void)
+@@ -332,7 +496,9 @@ sweet_surface_report(void)
  	}
  	IOLockUnlock(sweet_surface_lock);
  	/* name pubMB/n heldMB/n(retains of the held ones) */
@@ -195,7 +197,7 @@ index 49a5ea3..b7446c3 100644
  	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 60; i++) {
  		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u %llu/%u(r%u)", by[i].name, by[i].pub >> 20,
  		    by[i].npub, by[i].held >> 20, by[i].nheld, by[i].refs);
-@@ -360,6 +524,9 @@ SweetSurface::free()
+@@ -360,6 +526,9 @@ SweetSurface::free()
  	}
  	OSSafeReleaseNULL(kernelMap);
  	OSSafeReleaseNULL(values);
@@ -205,7 +207,7 @@ index 49a5ea3..b7446c3 100644
  	if (gpuPool && memory != NULL) {
  		OSSafeReleaseNULL(memory);
  		topaz_gpu_pool_free(scanoutPhys, poolSize);
-@@ -384,6 +551,9 @@ SweetSurface::kernelAddress()
+@@ -384,6 +553,9 @@ SweetSurface::kernelAddress()
  	if (buffer != NULL) {
  		return (uintptr_t)buffer->getBytesNoCopy();
  	}
@@ -215,7 +217,7 @@ index 49a5ea3..b7446c3 100644
  	IOLockLock(sweet_surface_lock);
  	if (kernelMap == NULL && memory != NULL) {
  		kernelMap = memory->map(scanoutPhys || wrapped ? kIOMapDefaultCache : kIOMapWriteCombineCache);
-@@ -745,6 +915,7 @@ IOCoreSurfaceRoot::start(IOService *provider)
+@@ -745,6 +917,7 @@ IOCoreSurfaceRoot::start(IOService *provider)
  		return false;
  	}
  	sweet_surface_init_lock();
@@ -223,7 +225,7 @@ index 49a5ea3..b7446c3 100644
  	setProperty(kIOUserClientClassKey, "IOSurfaceRootUserClient");
  	registerService();
  	IOLog("SWEET SURF: IOCoreSurfaceRoot registered\n");
-@@ -1144,6 +1315,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+@@ -1144,6 +1317,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
  	}
  	if (ret == kIOReturnSuccess && s->memory == NULL) {
  		IOBufferMemoryDescriptor *mem = NULL;
@@ -231,7 +233,7 @@ index 49a5ea3..b7446c3 100644
  		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
  		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
  			static int gpu_low = -1;        /* boot-arg gpu=1: surfaces the Adreno draws into stay below 4 GiB */
-@@ -1163,23 +1335,37 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+@@ -1163,23 +1337,37 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
  			 * pages came next. (The descriptor keeps them: RedwoodGPU gives them to the GPU.)
  			 */
  			uint64_t take = gpu_low ? sweet_round_upage(s->allocSize + 64ull * s->bytesPerRow) : s->allocSize;

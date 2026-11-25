@@ -1,0 +1,19 @@
+lavender: INTF_1 counters mapped (0xc96b800), so sweetfb_lock=1 ties vsync ticks to the panel
+
+- SweetFramebuffer.cpp: fIntf1 mapped when the MDP is in use
+- idea from the first lavender project (its 1001); made by xnu/src/mk_vlock.py
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index a0b5419..057cceb 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -520,7 +520,8 @@ AppleCLCD::start(IOService *provider)
+ 	}
+ 	OSSafeReleaseNULL(accel);
+ 	/* dpu sm6115 catalog: intf_1 at mdp+0x6a800, mdp at 0x5e01000 */
+-	fIntf1 = NULL;  /* lavender: no SM6225 INTF_1 */
++	/* lavender: SDM660 INTF_1 (DSI0) at 0xc96b800, counters as on topaz's DPU (xnu/src/mk_vlock.py) */
++	fIntf1 = fVig0 != NULL ? (volatile uint32_t *)ml_io_map(0x0c96b000, 0x1000) : NULL;
+ 	if (fIntf1 != NULL) {
+ 		volatile uint32_t *r = fIntf1 + 0x800 / 4;
+ 		r[0x0a8 / 4] = 0x3;     /* FRAME_LINE_COUNT_EN */
