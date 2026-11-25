@@ -27,6 +27,8 @@ def sub(old, new):
 
 
 sub('''static int preserve_frames = 1;''', '''static int order_draws = 1;             /* lavender: boot-arg glorder=0 - no flush before sampling a surface drawn into */
+static uint32_t order_drawn[16];        /* ... the IOSurfaces drawn into since the last flush (order_before()) */
+static unsigned order_count, order_flushes;
 static int preserve_frames = 1;''')
 sub('''		preserve_frames = strstr(arguments, "glpreserve=0") == NULL;
 ''', '''		preserve_frames = strstr(arguments, "glpreserve=0") == NULL;
@@ -44,9 +46,6 @@ drawing(struct eagl *e)
  * another texture (Mesa: another resource, ordered on its own), or samples the texture it draws
  * into, flushes first so that it reads what was drawn (patch_order.py).
  */
-static uint32_t order_drawn[16];
-static unsigned order_count, order_flushes;
-
 static void
 order_before(struct eagl *e)
 {
