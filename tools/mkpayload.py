@@ -124,7 +124,10 @@ FW_FILES = ("a512_zap.mdt", "a512_zap.b00", "a512_zap.b01", "a512_zap.b02", "a53
 FW_ZAPMEM = 0x10000
 
 
-def fw_archive(folder):
+USERLAND_FILES = ("libOSMesa.8.dylib", "libtopaz-gl.dylib", "libtopaz-inject.dylib", "backboardd")
+
+
+def fw_archive(folder, userland=None):
     """GPU firmware for the kernel, kept out of the repo and the CI kernel (proprietary).
 
     The shim copies the ramdisk slot right after the kernel image, inside the kernel's static
@@ -135,6 +138,8 @@ def fw_archive(folder):
     TrustZone for the zap shader (PAS 13 mem_setup): lavender's DT has no fixed region for it.
     """
     files = [(n, (Path(folder) / n).read_bytes()) for n in FW_FILES if (Path(folder) / n).exists()]
+    if userland:   # the GPU user space from the userland CI: the kernel installs it (patch 1015)
+        files += [(n, (Path(userland) / n).read_bytes()) for n in USERLAND_FILES if (Path(userland) / n).exists()]
     off = 0x1000
     table, blobs = b"", b""
     for name, data in files:
@@ -161,6 +166,7 @@ def main():
     ap.add_argument("--ramdisk")
     ap.add_argument("--cmdline", default="")
     ap.add_argument("--fw", help="folder of GPU firmware: packed into the ramdisk slot (see fw_archive)")
+    ap.add_argument("--userland", help="with --fw: folder of the userland CI's files, added to the archive")
     a = ap.parse_args()
 
     if a.kernel:
@@ -183,7 +189,7 @@ def main():
     if a.fw:
         if ramdisk:
             ap.error("--fw and --ramdisk both use the ramdisk slot")
-        ramdisk = fw_archive(a.fw)
+        ramdisk = fw_archive(a.fw, a.userland)
         virt_base = image_va & ~(BLOCK_32M - 1)
         ramdisk_pa = (image_va - virt_base + phys_base + memsize + PAGE_16K - 1) & ~(PAGE_16K - 1)
         cmdline += f" lv_fwpa=0x{ramdisk_pa:x}".encode()
