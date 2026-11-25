@@ -2,15 +2,15 @@ lavender: GPU step 1-2, Adreno 512 power-up probe (lv_gpu=1)
 
 - TopazRpm.cpp perf thread: GCC GPU branches, GPUCC CX/GX GDSC, gfx3d 300 MHz from GPLL0 with its root held on (ROOT_EN),
   then RBBM_STATUS, always-on counter and CP_SCRATCH read back; everything logged
-- GX rail: RPM vote smpb3 (PM660L S3) swen=1, vlvl=lv_gfx_lvl (default 0x80 SVS) before the GX GDSC
+- GX rail: RPM vote smpb3 (PM660L S3) swen=1, vlvl=lv_gfx_lvl (default 0x80 SVS) before the GX GDSC; AON reset before GDSC enable (msm gdsc.c order); gfx ldo regs logged
 - lv_gpu=N stops after stage N (1 log .. 7 register reads)
 - made by xnu/src/mk_gpu1.py
 
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index 0f88341..b83d7fc 100644
+index 0f88341..5c50d1a 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
-@@ -376,6 +376,137 @@ lavender_memcpy_speed(const char *when)
+@@ -376,6 +376,148 @@ lavender_memcpy_speed(const char *when)
  	}
  }
  
@@ -114,18 +114,29 @@ index 0f88341..b83d7fc 100644
 +		IODelay(2000);
 +	}
 +
-+	/* GX: reset pulse, power, AON reset pulse, unclamp, then its clock */
++	/* GFX LDO block (DT msm_gfx_ldo 0x506e000, BHS mode: all corners have allow-ldo-mode 0): read only */
++	{
++		volatile uint32_t *ldo = (volatile uint32_t *)ml_io_map(0x0506e000, 0x1000);
++		if (ldo) {
++			LOG("LVGPU gfx ldo: %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x",
++			    ldo[0], ldo[1], ldo[2], ldo[3], ldo[4], ldo[5], ldo[6], ldo[7], ldo[8], ldo[9], ldo[10], ldo[11], ldo[12]);
++		}
++	}
++
++	/* GX, in msm gdsc.c order: BCR pulse (sw-reset), AON reset pulse (reset-aon-logic, clamp
++	 * register bit 4), clear SW_COLLAPSE and wait for PWR_ON; then unclamp (bit 0), then clocks. */
 +	lv_w(lv_gpucc, 0x1090, 1);
 +	IODelay(10);
 +	lv_w(lv_gpucc, 0x1090, 0);
-+	ok &= lv_gdsc_on(0x1094, "GX");
-+	if (level < 6) {
-+		LOG("LVGPU stage 5 (GX reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
-+		return;
-+	}
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) | (1u << 4));
 +	IODelay(1);
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~(1u << 4));
++	ok &= lv_gdsc_on(0x1094, "GX");
++	if (level < 6) {
++		LOG("LVGPU stage 5 (GX reset + AON reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
++		return;
++	}
++	IODelay(1);
 +	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~1u);
 +	ok &= lv_branch(lv_gpucc, 0x1098, "gfx3d");
 +	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
@@ -148,7 +159,7 @@ index 0f88341..b83d7fc 100644
  static void
  lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
  {
-@@ -389,6 +520,11 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -389,6 +531,11 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
  		IOSleep(100);
  		lavender_memcpy_speed("after");
  	}

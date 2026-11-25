@@ -135,18 +135,29 @@ lavender_gpu_probe(uint32_t level)
 		IODelay(2000);
 	}
 
-	/* GX: reset pulse, power, AON reset pulse, unclamp, then its clock */
+	/* GFX LDO block (DT msm_gfx_ldo 0x506e000, BHS mode: all corners have allow-ldo-mode 0): read only */
+	{
+		volatile uint32_t *ldo = (volatile uint32_t *)ml_io_map(0x0506e000, 0x1000);
+		if (ldo) {
+			LOG("LVGPU gfx ldo: %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x %#x",
+			    ldo[0], ldo[1], ldo[2], ldo[3], ldo[4], ldo[5], ldo[6], ldo[7], ldo[8], ldo[9], ldo[10], ldo[11], ldo[12]);
+		}
+	}
+
+	/* GX, in msm gdsc.c order: BCR pulse (sw-reset), AON reset pulse (reset-aon-logic, clamp
+	 * register bit 4), clear SW_COLLAPSE and wait for PWR_ON; then unclamp (bit 0), then clocks. */
 	lv_w(lv_gpucc, 0x1090, 1);
 	IODelay(10);
 	lv_w(lv_gpucc, 0x1090, 0);
-	ok &= lv_gdsc_on(0x1094, "GX");
-	if (level < 6) {
-		LOG("LVGPU stage 5 (GX reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
-		return;
-	}
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) | (1u << 4));
 	IODelay(1);
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~(1u << 4));
+	ok &= lv_gdsc_on(0x1094, "GX");
+	if (level < 6) {
+		LOG("LVGPU stage 5 (GX reset + AON reset + GDSC) done: gx %#x clamp %#x", lv_r(lv_gpucc, 0x1094), lv_r(lv_gpucc, 0x130));
+		return;
+	}
+	IODelay(1);
 	lv_w(lv_gpucc, 0x130, lv_r(lv_gpucc, 0x130) & ~1u);
 	ok &= lv_branch(lv_gpucc, 0x1098, "gfx3d");
 	(void)lv_branch(lv_gpucc, 0x10d0, "rbbmtimer");
