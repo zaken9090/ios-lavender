@@ -1,0 +1,73 @@
+lavender: GPU pool buffers as parts of their chunk's descriptor (lock-screen hang with gpu=1)
+
+- TopazAdreno.cpp: each 64 MB chunk keeps its descriptor; topaz_gpu_pool_md() gives an IOSubMemoryDescriptor of it,
+  so letting a buffer go no longer destroys a device pager (backboardd waited in vm_object_destroy)
+- idea from the first lavender project (its 1021); made by xnu/src/mk_pool.py
+
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 016898f..e684d39 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -19,6 +19,7 @@
+  */
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOBufferMemoryDescriptor.h>
++#include <IOKit/IOSubMemoryDescriptor.h>
+ #include <IOKit/IOLocks.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/thread.h>
+@@ -171,6 +172,7 @@ kbuf_pa(struct kbuf *b, uint64_t off)
+ #define GPU_POOL_CHUNK      0x4000000ull        /* 64 MB: mapped on first use (1 GB at once is more IO space than there is) */
+ #define GPU_POOL_CHUNKS     (GPU_POOL_SIZE / GPU_POOL_CHUNK)
+ static uint8_t *gpu_chunk_va[GPU_POOL_CHUNKS];
++static IOMemoryDescriptor *gpu_chunk_md[GPU_POOL_CHUNKS];  /* lavender: a chunk's descriptor, kept for good */
+ static bool gpu_pool_ready;
+ static struct { uint64_t start, size; } pool_free[2048];
+ static unsigned pool_free_count;
+@@ -227,12 +229,31 @@ range_alloc(void *table, unsigned *count, uint64_t size)
+  * unaligned accesses there were SIGBUS). The kIOMapWriteCombineCache option of
+  * the mapping alone does not change it.
+  */
++static IOMemoryDescriptor *
++gpu_phys_md(uint64_t pa, uint64_t size)
++{
++	return IOMemoryDescriptor::withAddressRange(pa, size,
++	           kIODirectionInOut | (kIOWriteCombineCache << kIOMemoryBufferCacheShift), TASK_NULL);
++}
++
++/*
++ * lavender: a pool buffer is a part of its chunk's descriptor. A descriptor of its own had a device
++ * pager of its own, and the last unmap of it destroyed the pager's VM object, where backboardd's
++ * render thread could wait for good (xnu/src/mk_pool.py). The chunk's pager never goes away.
++ */
+ extern "C" IOMemoryDescriptor *topaz_gpu_pool_md(uint64_t pa, uint64_t size);
+ IOMemoryDescriptor *
+ topaz_gpu_pool_md(uint64_t pa, uint64_t size)
+ {
+-	return IOMemoryDescriptor::withAddressRange(pa, size,
+-	           kIODirectionInOut | (kIOWriteCombineCache << kIOMemoryBufferCacheShift), TASK_NULL);
++	if (pa >= GPU_POOL_BASE && pa + size <= GPU_POOL_BASE + GPU_POOL_SIZE) {
++		unsigned c = (unsigned)((pa - GPU_POOL_BASE) / GPU_POOL_CHUNK);
++		uint64_t off = pa - GPU_POOL_BASE - c * GPU_POOL_CHUNK;
++		if (gpu_chunk_md[c] != NULL && off + size <= GPU_POOL_CHUNK) {
++			return IOSubMemoryDescriptor::withSubRange(gpu_chunk_md[c], (IOByteCount)off, (IOByteCount)size,
++			           kIODirectionInOut);
++		}
++	}
++	return gpu_phys_md(pa, size);
+ }
+ 
+ /* boot-arg gpu_midmem=1: the ADT gives the kernel RAM below 4 GiB (mkadt.py --midmem), GPU memory is the kernel's */
+@@ -269,10 +290,11 @@ topaz_gpu_pool_alloc(uint64_t size, void **va)
+ 	unsigned c = (unsigned)((pa - GPU_POOL_BASE) / GPU_POOL_CHUNK);
+ 	if (gpu_chunk_va[c] == NULL) {
+ 		/* in the kernel map, not the small IO submap ml_io_map uses (64 MB there failed) */
+-		IOMemoryDescriptor *md = topaz_gpu_pool_md(GPU_POOL_BASE + c * GPU_POOL_CHUNK, GPU_POOL_CHUNK);
++		IOMemoryDescriptor *md = gpu_phys_md(GPU_POOL_BASE + c * GPU_POOL_CHUNK, GPU_POOL_CHUNK);
+ 		IOMemoryMap *map = md != NULL ? md->map(kIOMapWriteCombineCache) : NULL;
+ 		if (map != NULL) {
+ 			gpu_chunk_va[c] = (uint8_t *)map->getVirtualAddress();     /* (kept for good, with md) */
++			gpu_chunk_md[c] = md;
+ 		}
+ 		if (gpu_chunk_va[c] == NULL) {
+ 			OSSafeReleaseNULL(map);

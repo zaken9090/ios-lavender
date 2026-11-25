@@ -39,4 +39,18 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    **Done 2026-11-25** (patch 1014, gpu=1): TopazAdreno's hardware layer on the A512, GPU pool moved to
    0xA1000000 (free low RAM), empty-submission fence self-test done; UI fps unchanged (4.5 / 13.0).
 8. Userland CI (macOS runner: Mesa freedreno + OSMesa, redwood-drm, libtopaz-gl, inject) → into the root → UI drawn by the GPU, bench.
+   **Partial 2026-11-25**: GL draws the lock screen (FD512), but no unlock, frames 0.5-1.5 s late,
+   then a hang. Plan (from a review of the user's first project, ios-lavender patches 1018-1036 and
+   userland commits; each port asked for first):
+   a. **Pool descriptors as sub-ranges of the chunk's** (first project 1021, ~30 lines, TopazAdreno.cpp).
+      Our tree still makes a descriptor of its own per buffer; its last unmap destroys the device
+      pager and backboardd's render thread waits in vm_object_destroy for good - their "lock-screen
+      freeze" a minute or two after boot. Test: gpu=1 glfetch=0, unlock + bench.
+   b. GPU hang report + recovery (1036) - if a. is not all of it.
+   c. Userland defaults: FD_MESA_DEBUG=sysmem (home 36->45 fps there), glorder=2, glsolid, glzero,
+      cheaper surface_changed (was 15% of backboardd).
+   d. Surface arena (1018/1019): the GPU reads app/SpringBoard surfaces in place, no 11 MB copy.
+   e. Threaded Mesa context + its three freedreno fixes (c60e82a, dc161c9, 93d9897, 1c88839).
+   f. Picture correctness: framebuffer-fetch emulation, blur fixes (glsync, glpreserve, ds8).
+   g. Later: 750x1624 scaled scanout (1028/1029), vsync rate (1033), ipc speed (1035).
 9. Later: SMMU translation, interrupts, GPU clock 600+ MHz (GX voltage vote), render straight into display surfaces.
