@@ -1,0 +1,48 @@
+lavender: lv:shot sends the frame the MDP scans (direct frames), not the console splash
+
+- sweet_usb.c: VIG0 mapped at USB start; lv:shot takes SRC0_ADDR, YSTRIDE and SRC_SIZE when VIG0 does not
+  fetch the splash
+- made by xnu/src/mk_shot.py
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 6d57601..4bc9f23 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -755,6 +755,8 @@ ud_rx_done(void)
+  * lv:shot: the panel's framebuffer (/sweet-fbcon in the device tree) goes out by DMA straight from
+  * its physical address, 1 MiB per transfer, after a text header in the log stream.
+  */
++static volatile uint32_t *ud_vig0;        /* lavender: MDP VIG0, what the panel shows (xnu/src/mk_shot.py) */
++
+ static bool
+ ud_tx_shot(void)
+ {
+@@ -773,9 +775,18 @@ ud_tx_shot(void)
+ 			return false;
+ 		}
+ 		ud.shot_pa = reg[0];
+-		ud.shot_left = (uint64_t)*stride * *h;
++		uint32_t sw = *w, sh = *h, ss = *stride;
++		/* lavender: the MDP may scan a frame of its own (direct frames, patch 1020): send that */
++		uint32_t src = ud_vig0 != NULL ? ud_vig0[0x14 / 4] : 0, size = ud_vig0 != NULL ? ud_vig0[0x00 / 4] : 0;
++		if (src != 0 && src != (uint32_t)reg[0] && (size & 0xffff) != 0 && (size >> 16) != 0) {
++			ud.shot_pa = src;
++			sw = size & 0xffff;
++			sh = size >> 16;
++			ss = ud_vig0[0x24 / 4] & 0xffff;
++		}
++		ud.shot_left = (uint64_t)ss * sh;
+ 		uint32_t n = (uint32_t)snprintf((char *)(ud.dma + UD_TX), UD_BUF_MAX, "\n@@LVSHOT %u %u %u %llu@@\n",
+-		    *w, *h, *stride, ud.shot_left);
++		    sw, sh, ss, ud.shot_left);
+ 		ud.tx_busy = true;
+ 		ud_start_trb(EP_TX, UD_TRB_TX, UD_TX, n, TRBCTL_NORMAL);
+ 		return true;
+@@ -985,6 +996,7 @@ sweet_usb_probe(void)
+ 	started = true;
+ 	vm_offset_t gcc = ml_io_map(GCC_PA, GCC_SIZE);
+ 	ud.dwc = ml_io_map(DWC3_PA, DWC3_SIZE);
++	ud_vig0 = (volatile uint32_t *)ml_io_map(0x0c905000, 0x1000);       /* lavender: for lv:shot */
+ 	if (gcc == 0 || ud.dwc == 0) {
+ 		printf("LV USB: map failed\n");
+ 		return;
