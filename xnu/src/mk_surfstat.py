@@ -4,11 +4,11 @@ With gpu=1 the kernel's wired pages grew to 1.7 GB of the 1.95 GB iOS has (SMM l
 and the UI paged its code in from disk, throttled. Buffer surfaces are wired kernel memory, capped
 at SWEET_SURFACE_WIRED_MAX (1.5 GB). Each sampler round (bsd/dev/sweet_sample.c) now prints
 
-  SMS wired <MB> | table <MB> in <n> | name <MB>/<n> ...
+  SMS wired <MB> | live <MB> in <n> | name <pub MB>/<n> <held MB>/<n>(r<retains>) ...
 
-wired: sweet_surface_wired (all live buffer surfaces); table: those still published (an id that
-can be looked up), by the process that created them. wired - table = surfaces nobody can look
-up any more but something still holds (a mapping, a texture, a leak).
+wired: sweet_surface_wired; live: every buffer surface still alive (a list of all of them), by the
+process that created them: published (in the table, id lookups work) or only held (nobody can
+look it up any more, something still retains it: a mapping, a texture, a leak).
 
 usage: python mk_surfstat.py XNU_TREE
 """
@@ -39,9 +39,10 @@ load('iokit/Kernel/arm/SweetSurface.h')
 sub('''	uint64_t                  poolSize;     /* bytes taken from the GPU pool (allocSize and a guard) */
 ''', '''	uint64_t                  poolSize;     /* bytes taken from the GPU pool (allocSize and a guard) */
 	char                      creator[20];  /* lavender: the creating process (xnu/src/mk_surfstat.py) */
+	SweetSurface             *allNext, *allPrev;    /* lavender: every live surface, for the SMS line */
 ''')
 sub('''gpuPool = false; poolSize = 0; return OSObject::init(); }''',
-    '''gpuPool = false; poolSize = 0; creator[0] = 0; return OSObject::init(); }''')
+    '''gpuPool = false; poolSize = 0; creator[0] = 0; allNext = allPrev = NULL; return OSObject::init(); }''')
 save()
 
 load('iokit/Kernel/arm/SweetSurface.cpp')
@@ -53,51 +54,99 @@ sub('''OSDefineMetaClassAndStructors(SweetSurface, OSObject);
 ''', '''OSDefineMetaClassAndStructors(SweetSurface, OSObject);
 
 /*
- * lavender: the sampler's SMS line - wired buffer surfaces, and those still in the table by the
- * process that created them (xnu/src/mk_surfstat.py).
+ * lavender: every live surface is on a list, so that the sampler's SMS line can tell the published
+ * ones (in the table, id lookups work) from those only something else still holds, by the process
+ * that created them (xnu/src/mk_surfstat.py).
  */
+static SweetSurface *sweet_surface_all;     /* sweet_surface_lock */
+
 extern "C" void sweet_surface_report(void);
 void
 sweet_surface_report(void)
 {
-	struct { char name[20]; uint64_t bytes; uint32_t n; } by[12];
+	struct { char name[20]; uint64_t pub, held; uint32_t npub, nheld, refs; } by[14];
 	unsigned names = 0, n = 0;
-	uint64_t table = 0;
-	char line[480];
+	uint64_t all = 0;
+	char line[600];
 	int len;
 
 	if (sweet_surface_lock == NULL) {
 		return;
 	}
 	IOLockLock(sweet_surface_lock);
-	for (uint32_t id = 1; id < SWEET_SURFACE_MAX_ID; id++) {
-		SweetSurface *t = sweet_surface_table[id];
-		if (t == NULL || OSDynamicCast(IOBufferMemoryDescriptor, t->memory) == NULL) {
-			continue;
+	for (SweetSurface *t = sweet_surface_all; t != NULL; t = t->allNext) {
+		if (OSDynamicCast(IOBufferMemoryDescriptor, t->memory) == NULL) {
+			continue;       /* GPU pool, wrapped client memory, physical: not wired by surfaces */
 		}
+		bool pub = t->id < SWEET_SURFACE_MAX_ID && sweet_surface_table[t->id] == t;
 		n++;
-		table += t->allocSize;
+		all += t->allocSize;
 		unsigned i;
-		for (i = 0; i < names && strncmp(by[i].name, t->creator, sizeof(by[i].name)) != 0; i++) {
+		for (i = 0; i < names && strncmp(by[i].name, t->creator[0] ? t->creator : "?", sizeof(by[i].name)) != 0; i++) {
 		}
-		if (i == names && names < 12) {
+		if (i == names && names < 14) {
 			strlcpy(by[i].name, t->creator[0] ? t->creator : "?", sizeof(by[i].name));
-			by[i].bytes = 0;
-			by[i].n = 0;
+			by[i].pub = by[i].held = 0;
+			by[i].npub = by[i].nheld = by[i].refs = 0;
 			names++;
 		}
 		if (i < names) {
-			by[i].bytes += t->allocSize;
-			by[i].n++;
+			if (pub) {
+				by[i].pub += t->allocSize;
+				by[i].npub++;
+			} else {
+				by[i].held += t->allocSize;
+				by[i].nheld++;
+				by[i].refs += (uint32_t)t->getRetainCount();
+			}
 		}
 	}
 	IOLockUnlock(sweet_surface_lock);
-	len = snprintf(line, sizeof(line), "SMS wired %llu | table %llu in %u |", sweet_surface_wired >> 20, table >> 20, n);
-	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 40; i++) {
-		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u", by[i].name, by[i].bytes >> 20, by[i].n);
+	/* name pubMB/n heldMB/n(retains of the held ones) */
+	len = snprintf(line, sizeof(line), "SMS wired %llu | live %llu in %u |", sweet_surface_wired >> 20, all >> 20, n);
+	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 60; i++) {
+		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u %llu/%u(r%u)", by[i].name, by[i].pub >> 20,
+		    by[i].npub, by[i].held >> 20, by[i].nheld, by[i].refs);
 	}
-	IOLog("%s\\n", line);
+	IOLog("%s\n", line);
 }
+''')
+sub('''void
+SweetSurface::free()
+{
+''', '''void
+SweetSurface::free()
+{
+	if (sweet_surface_lock != NULL) {       /* lavender: off the list of live surfaces */
+		IOLockLock(sweet_surface_lock);
+		if (allPrev != NULL) {
+			allPrev->allNext = allNext;
+		} else if (sweet_surface_all == this) {
+			sweet_surface_all = allNext;
+		}
+		if (allNext != NULL) {
+			allNext->allPrev = allPrev;
+		}
+		IOLockUnlock(sweet_surface_lock);
+	}
+''')
+sub('''	SweetSurface *s = OSTypeAlloc(SweetSurface);
+	if (s == NULL || !s->init()) {
+		OSSafeReleaseNULL(s);
+		return NULL;
+	}
+''', '''	SweetSurface *s = OSTypeAlloc(SweetSurface);
+	if (s == NULL || !s->init()) {
+		OSSafeReleaseNULL(s);
+		return NULL;
+	}
+	IOLockLock(sweet_surface_lock);         /* lavender: on the list of live surfaces (SMS line) */
+	s->allNext = sweet_surface_all;
+	if (sweet_surface_all != NULL) {
+		sweet_surface_all->allPrev = s;
+	}
+	sweet_surface_all = s;
+	IOLockUnlock(sweet_surface_lock);
 ''')
 save()
 

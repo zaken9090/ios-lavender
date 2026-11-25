@@ -1,7 +1,7 @@
-lavender: SMS line - wired IOSurface memory by creating process (who holds 1.5 GB with gpu=1)
+lavender: SMS line - wired IOSurface memory by creating process, published or only held (who holds 1.2 GB)
 
-- SweetSurface: creator name per surface; sweet_surface_report() sums the published buffer surfaces by creator
-  and prints them with sweet_surface_wired; the sampler calls it every round
+- SweetSurface: creator name and a list of every live surface; sweet_surface_report() sums the buffer
+  surfaces by creator, split into published and only held (with their retain counts); the sampler calls it
 - made by xnu/src/mk_surfstat.py
 
 diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
@@ -25,64 +25,105 @@ index b40eccd..44da38d 100644
  	}
  }
 diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
-index e17297a..2e1030e 100644
+index e17297a..6ed75a9 100644
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -282,6 +282,53 @@ sweet_scanout_free_slot(int slot)
+@@ -282,9 +282,80 @@ sweet_scanout_free_slot(int slot)
  
  OSDefineMetaClassAndStructors(SweetSurface, OSObject);
  
 +/*
-+ * lavender: the sampler's SMS line - wired buffer surfaces, and those still in the table by the
-+ * process that created them (xnu/src/mk_surfstat.py).
++ * lavender: every live surface is on a list, so that the sampler's SMS line can tell the published
++ * ones (in the table, id lookups work) from those only something else still holds, by the process
++ * that created them (xnu/src/mk_surfstat.py).
 + */
++static SweetSurface *sweet_surface_all;     /* sweet_surface_lock */
++
 +extern "C" void sweet_surface_report(void);
 +void
 +sweet_surface_report(void)
 +{
-+	struct { char name[20]; uint64_t bytes; uint32_t n; } by[12];
++	struct { char name[20]; uint64_t pub, held; uint32_t npub, nheld, refs; } by[14];
 +	unsigned names = 0, n = 0;
-+	uint64_t table = 0;
-+	char line[480];
++	uint64_t all = 0;
++	char line[600];
 +	int len;
 +
 +	if (sweet_surface_lock == NULL) {
 +		return;
 +	}
 +	IOLockLock(sweet_surface_lock);
-+	for (uint32_t id = 1; id < SWEET_SURFACE_MAX_ID; id++) {
-+		SweetSurface *t = sweet_surface_table[id];
-+		if (t == NULL || OSDynamicCast(IOBufferMemoryDescriptor, t->memory) == NULL) {
-+			continue;
++	for (SweetSurface *t = sweet_surface_all; t != NULL; t = t->allNext) {
++		if (OSDynamicCast(IOBufferMemoryDescriptor, t->memory) == NULL) {
++			continue;       /* GPU pool, wrapped client memory, physical: not wired by surfaces */
 +		}
++		bool pub = t->id < SWEET_SURFACE_MAX_ID && sweet_surface_table[t->id] == t;
 +		n++;
-+		table += t->allocSize;
++		all += t->allocSize;
 +		unsigned i;
-+		for (i = 0; i < names && strncmp(by[i].name, t->creator, sizeof(by[i].name)) != 0; i++) {
++		for (i = 0; i < names && strncmp(by[i].name, t->creator[0] ? t->creator : "?", sizeof(by[i].name)) != 0; i++) {
 +		}
-+		if (i == names && names < 12) {
++		if (i == names && names < 14) {
 +			strlcpy(by[i].name, t->creator[0] ? t->creator : "?", sizeof(by[i].name));
-+			by[i].bytes = 0;
-+			by[i].n = 0;
++			by[i].pub = by[i].held = 0;
++			by[i].npub = by[i].nheld = by[i].refs = 0;
 +			names++;
 +		}
 +		if (i < names) {
-+			by[i].bytes += t->allocSize;
-+			by[i].n++;
++			if (pub) {
++				by[i].pub += t->allocSize;
++				by[i].npub++;
++			} else {
++				by[i].held += t->allocSize;
++				by[i].nheld++;
++				by[i].refs += (uint32_t)t->getRetainCount();
++			}
 +		}
 +	}
 +	IOLockUnlock(sweet_surface_lock);
-+	len = snprintf(line, sizeof(line), "SMS wired %llu | table %llu in %u |", sweet_surface_wired >> 20, table >> 20, n);
-+	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 40; i++) {
-+		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u", by[i].name, by[i].bytes >> 20, by[i].n);
++	/* name pubMB/n heldMB/n(retains of the held ones) */
++	len = snprintf(line, sizeof(line), "SMS wired %llu | live %llu in %u |", sweet_surface_wired >> 20, all >> 20, n);
++	for (unsigned i = 0; i < names && len < (int)sizeof(line) - 60; i++) {
++		len += snprintf(line + len, sizeof(line) - len, " %s %llu/%u %llu/%u(r%u)", by[i].name, by[i].pub >> 20,
++		    by[i].npub, by[i].held >> 20, by[i].nheld, by[i].refs);
 +	}
-+	IOLog("%s\n", line);
++	IOLog("%s
++", line);
 +}
 +
  void
  SweetSurface::free()
  {
-@@ -1114,6 +1161,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
++	if (sweet_surface_lock != NULL) {       /* lavender: off the list of live surfaces */
++		IOLockLock(sweet_surface_lock);
++		if (allPrev != NULL) {
++			allPrev->allNext = allNext;
++		} else if (sweet_surface_all == this) {
++			sweet_surface_all = allNext;
++		}
++		if (allNext != NULL) {
++			allNext->allPrev = allPrev;
++		}
++		IOLockUnlock(sweet_surface_lock);
++	}
+ 	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
+ 		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+ 	}
+@@ -422,6 +493,13 @@ sweet_surface_alloc(void)
+ 		OSSafeReleaseNULL(s);
+ 		return NULL;
+ 	}
++	IOLockLock(sweet_surface_lock);         /* lavender: on the list of live surfaces (SMS line) */
++	s->allNext = sweet_surface_all;
++	if (sweet_surface_all != NULL) {
++		sweet_surface_all->allPrev = s;
++	}
++	sweet_surface_all = s;
++	IOLockUnlock(sweet_surface_lock);
+ 	s->state = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+ 	    kIODirectionInOut | kIOMemoryKernelUserShared, SWEET_UPAGE, SWEET_UPAGE);
+ 	if (s->state == NULL) {
+@@ -1114,6 +1192,7 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
  			}
  		}
  	}
@@ -91,18 +132,19 @@ index e17297a..2e1030e 100644
  		char name[32];
  		proc_selfname(name, sizeof(name));
 diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
-index 5b74320..0a9b54a 100644
+index 5b74320..ff437d1 100644
 --- a/iokit/Kernel/arm/SweetSurface.h
 +++ b/iokit/Kernel/arm/SweetSurface.h
-@@ -47,9 +47,10 @@ public:
+@@ -47,9 +47,11 @@ public:
  	bool                      wrapped;      /* memory is a prepared range of a task (IOSurfaceWrapClient*) */
  	bool                      gpuPool;      /* topaz GPU: memory from the GPU pool below 4 GiB (scanoutPhys = its address) */
  	uint64_t                  poolSize;     /* bytes taken from the GPU pool (allocSize and a guard) */
 +	char                      creator[20];  /* lavender: the creating process (xnu/src/mk_surfstat.py) */
++	SweetSurface             *allNext, *allPrev;    /* lavender: every live surface, for the SMS line */
  	uint32_t                  drawn;        /* topaz GPU: last submission naming this surface (RedwoodGPU.cpp) */
  
 -	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; return OSObject::init(); }
-+	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; creator[0] = 0; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; creator[0] = 0; allNext = allPrev = NULL; return OSObject::init(); }
  	void free() APPLE_KEXT_OVERRIDE;
  
  	/* Kernel address of the pixels (mapped on first use), or 0. */
