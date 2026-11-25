@@ -6,7 +6,7 @@ gcc_gpu_cfg_ahb / bimc_gfx / gpu_bimc_gfx (on since step 2). Context banks: gfx3
 gfx3d_secure = SID 2 (TrustZone's). attach-impl-defs: pairs written by Linux on attach.
 
 lv_gpu=9: read only - sCR0, IDR0-2, GFSR, SMR/S2CR/CBAR/CBA2R 0-7, CB0 SCTLR/FSR.
-lv_gpu=10: also write attach-impl-defs, then CB0 as the base's identity mode (TopazAdreno.cpp
+lv_gpu=10: (attach-impl-defs only with lv_smmu_impl=1: they hung the phone) then CB0 as the base's identity mode (TopazAdreno.cpp
 smmu_setup with gpu_identity: CBA2R AArch64, CBAR S1 translate / S2 bypass, SCTLR 0xE0 = M off,
 i.e. GPU addresses are physical), SMR0/S2CR0 only if the secure side left them unset; GFSR/FSR after.
 
@@ -56,19 +56,31 @@ lavender_gpu_smmu(uint32_t level)
 		{ 0x6900, 0x3ff }, { 0x6924, 0x204 }, { 0x6928, 0x11000 }, { 0x6930, 0x800 }, { 0x6960, 0xffffffff },
 		{ 0x6b64, 0x1a5551 }, { 0x6b68, 0x9a82a382 },
 	};
-	for (unsigned i = 0; i < sizeof(impl) / sizeof(impl[0]); i++) {
+	/*
+	 * 2026-11-25: writing attach-impl-defs straight away hung the whole phone (the first is 0x6000,
+	 * qcom,micro-mmu-control; Linux halts the SMMU through it first). Off unless lv_smmu_impl=1.
+	 * Every step is logged before it runs, so a hang names its register.
+	 */
+	uint32_t do_impl = 0;
+	PE_parse_boot_argn("lv_smmu_impl", &do_impl, sizeof(do_impl));
+	for (unsigned i = 0; do_impl && i < sizeof(impl) / sizeof(impl[0]); i++) {
+		LOG("LVSMMU impl %#x = %#x", impl[i][0], impl[i][1]);
 		lv_w((volatile uint32_t *)m, impl[i][0], impl[i][1]);
 	}
+	LOG("LVSMMU CB0 SCTLR off, FSR clear");
 	lv_w(m, 0x8000, 0);                     /* CB0 SCTLR off while programming */
 	lv_w(m, 0x8058, 0xffffffff);            /* CB0 FSR clear */
+	LOG("LVSMMU CBA2R0 / CBAR0");
 	lv_w(m, 0x1800, 1);                     /* CBA2R0: AArch64 */
 	lv_w(m, 0x1000, 0x0001f000);            /* CBAR0: S1 translate, S2 bypass */
+	LOG("LVSMMU CB0 SCTLR 0xe0 (M off)");
 	lv_w(m, 0x8000, 0xe0);                  /* SCTLR: M off = GPU addresses are physical */
-	if (!(m[0x800 / 4] & 0x80000000u)) {    /* SMR0 not valid: SID 0 -> CB0 */
+	if (!(m[0x800 / 4] & 0x80000000u)) {    /* SMR0 not valid: SID 0 (mask 1: 0-1) -> CB0 */
+		LOG("LVSMMU S2CR0 -> CB0, SMR0 SID 0 mask 1");
 		lv_w(m, 0xc00, 0);
 		lv_w(m, 0x800, (1u << 31) | (1u << 16));
-		LOG("LVSMMU SMR0 was unset: SID 0 -> CB0");
 	}
+	LOG("LVSMMU GFSR clear, TLB");
 	lv_w(m, 0x48, m[0x48 / 4]);             /* GFSR: write back to clear */
 	lv_w(m, 0x8618, 0);                     /* CB0 TLBIALL */
 	lv_w(m, 0x87f0, 0);                     /* CB0 TLBSYNC */
