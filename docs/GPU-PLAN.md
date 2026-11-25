@@ -33,6 +33,8 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    ldp/writeback accesses hang), only entries below NUMSMRG (3), no attach-impl-defs.
 5. PM4/PFP, a5xx_hw_init, ring, ME_INIT → "CP up".
 6. Self-test CACHE_FLUSH_TS → fence value in memory.
+   **Steps 5-6 done 2026-11-25** (patch 1013, lv_gpu=11): A512 a5xx_hw_init, PM4/PFP + ring in low RAM
+   (0x95400000), ME_INIT, SET_SECURE_MODE 0, PKT4 scratch write and CACHE_FLUSH_TS fence all complete.
 7. Ids 512 / 0x05010200 / 0x44000 → RedwoodGPU published.
 8. Userland CI (macOS runner: Mesa freedreno + OSMesa, redwood-drm, libtopaz-gl, inject) → into the root → UI drawn by the GPU, bench.
 9. Later: SMMU translation, interrupts, GPU clock 600+ MHz (GX voltage vote), render straight into display surfaces.
