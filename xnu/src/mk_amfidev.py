@@ -25,6 +25,7 @@ sub('''	error = copyin(arg, in_out, sizeof(in_out));
 		error = copyout(&allow, (user_addr_t)in_out[1], sizeof(allow));
 ''', '''	{
 		/* lavender (xnu/src/mk_amfidev.py): bit 0x100 lets the sweetstderr= process mirror its log to stderr */
+		extern boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 		static char want[32];
 		static int on = -1;
 		char name[32];

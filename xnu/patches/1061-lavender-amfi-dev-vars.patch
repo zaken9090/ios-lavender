@@ -1,15 +1,16 @@
 lavender: AMFI dyld policy bit 0x100 for the sweetstderr= process, so OS_ACTIVITY_DT_MODE works (generator: xnu/src/mk_amfidev.py)
 
 diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
-index 3f45456..035a5b7 100644
+index 3f45456..3f3198d 100644
 --- a/bsd/kern/sweet_amfi.c
 +++ b/bsd/kern/sweet_amfi.c
-@@ -398,6 +398,21 @@ sweet_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
+@@ -398,6 +398,22 @@ sweet_amfi_syscall(__unused struct proc *p, int call, user_addr_t arg)
  		}
  		return 0;
  	}
 +	{
 +		/* lavender (xnu/src/mk_amfidev.py): bit 0x100 lets the sweetstderr= process mirror its log to stderr */
++		extern boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 +		static char want[32];
 +		static int on = -1;
 +		char name[32];
