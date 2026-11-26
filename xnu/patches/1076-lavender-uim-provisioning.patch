@@ -1,0 +1,126 @@
+lavender: the kernel activates the SIM application as the GW provisioning session (generator: xnu/src/mk_uimprov.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 0daf435..64c06ca 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -799,6 +799,9 @@ static unsigned q_odd;
+ 
+ #define PORT_DMSC           0x4005              /* our QMI client port towards DMS (mk_modemmode.py) */
+ #define PORT_DIAG           0x4010              /* DIAG CNTL, DATA, DCI servers (mk_diagsrv.py) */
++#define PORT_UIMC           0x4006              /* our QMI client port towards UIM (mk_uimprov.py) */
++static bool uim_prov_asked;
++static uint32_t uim_node, uim_port;
+ static uint32_t diag_msgs[3], diag_bytes[3];
+ static bool dms_mode_sent;
+ 
+@@ -852,6 +855,17 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+ 				qrtr_send(QRTR_TYPE_DATA, PORT_DMSC, c->c, c->d, get, sizeof(get));
+ 			}
+ 		}
++		if (c->a == 0x0b && !uim_prov_asked) {         /* UIM: activate the GW session if nobody did (mk_uimprov.py) */
++			uint32_t prov = 1;
++			uim_prov_asked = true;
++			(void)PE_parse_boot_argn("modem_prov", &prov, sizeof(prov));
++			if (prov != 0) {
++				uint8_t get[11] = { 0, 3, 0, 0x2f, 0, 4, 0, 0x10, 1, 0, 0 };
++				uim_node = c->c;
++				uim_port = c->d;
++				qrtr_send(QRTR_TYPE_DATA, PORT_UIMC, c->c, c->d, get, sizeof(get));
++			}
++		}
+ 		if (c->a == QMI_SVC_WLFW) {
+ 			LOG("t=%u ms: *** WLFW service 0x45 up: inst %x node %u port %x ***", g_ms, c->b, c->c, c->d);
+ 			wlfw_arrive(c->c, c->d);
+@@ -5331,6 +5345,80 @@ qmux_pump(void)
+ 	}
+ }
+ 
++/* UIM answers to our own port: card status -> activate the GW provisioning session */
++static void
++uim_prov_rx(const uint8_t *d, uint32_t len)
++{
++	uint16_t msg = 0, l = 0;
++	if (len < 7) {
++		return;
++	}
++	memcpy(&msg, d + 3, 2);
++	if (msg == 0x38) {
++		uint16_t res = 0, err = 0;
++		if (len >= 14) {
++			memcpy(&res, d + 10, 2);
++			memcpy(&err, d + 12, 2);
++		}
++		LOG("uim prov: CHANGE_PROVISIONING_SESSION -> result %u error %#x", res, err);
++		return;
++	}
++	if (msg != 0x2f) {
++		return;
++	}
++	const uint8_t *v = qm_find(d, len, 0x10, &l);
++	if (v == NULL || l < 9) {
++		LOG("uim prov: card status without the status TLV (%u bytes)", len);
++		return;
++	}
++	uint16_t gw;
++	memcpy(&gw, v, 2);
++	uint32_t at = 9, nslots = v[8];
++	int best_slot = -1, best_type = 0;
++	uint8_t aid[32], aid_len = 0;
++	for (uint32_t sl = 0; sl < nslots && at + 6 <= l; sl++) {
++		uint8_t card = v[at], napp = v[at + 5];
++		at += 6;
++		for (uint32_t a = 0; a < napp && at + 7 <= l; a++) {
++			uint8_t type = v[at], state = v[at + 1], alen = v[at + 6];
++			if (at + 7 + alen + 7 > l) {
++				at = l;
++				break;
++			}
++			LOG("uim prov: slot %u card %u app %u type %u state %u", sl + 1, card, a, type, state);
++			if (card == 1 && (type == 2 || (type == 1 && best_type != 2)) && best_slot < 0 && alen <= sizeof(aid)) {
++				best_slot = (int)sl + 1;
++				best_type = type;
++				aid_len = alen;
++				memcpy(aid, v + at + 7, alen);
++			}
++			at += 7u + alen + 7u;
++		}
++	}
++	if (gw != 0xffff) {
++		LOG("uim prov: GW primary session already on application %#x", gw);
++		return;
++	}
++	if (best_slot < 0) {
++		LOG("uim prov: no SIM/USIM application on a present card");
++		return;
++	}
++	uint8_t req[7 + 5 + 3 + 2 + 32];
++	uint16_t n = 7;
++	req[n++] = 0x01; req[n++] = 2; req[n++] = 0; req[n++] = 0; req[n++] = 1;     /* session 0 (GW primary), activate */
++	req[n++] = 0x10; req[n++] = (uint8_t)(2 + aid_len); req[n++] = 0;
++	req[n++] = (uint8_t)best_slot;
++	req[n++] = aid_len;
++	memcpy(req + n, aid, aid_len);
++	n += aid_len;
++	uint16_t body = (uint16_t)(n - 7), id = 0x38;
++	req[0] = 0; req[1] = 4; req[2] = 0;
++	memcpy(req + 3, &id, 2);
++	memcpy(req + 5, &body, 2);
++	LOG("uim prov: activating the %s application of slot %d as GW primary", best_type == 2 ? "USIM" : "SIM", best_slot);
++	qrtr_send(QRTR_TYPE_DATA, PORT_UIMC, uim_node, uim_port, req, n);
++}
++
+ static bool
+ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
+ {
+@@ -5346,6 +5434,10 @@ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *d
+ 		}
+ 		return true;
+ 	}
++	if (dst_port == PORT_UIMC) {
++		uim_prov_rx(data, len);
++		return true;
++	}
+ 	if (dst_port == PORT_DMSC) {
+ 		uint16_t msg = 0;
+ 		if (len >= 5) {
