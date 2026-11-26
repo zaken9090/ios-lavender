@@ -27,9 +27,7 @@ def sub(old, new):
 sub('''static volatile uint32_t *tm;''', '''static volatile uint32_t *tm;
 
 /* osfmk: per-processor tick counters (struct processor_cpu_load_info: user, system, idle, nice) */
-extern "C" void *cpu_to_processor(int cpu);
-extern "C" int processor_info(void *processor, int flavor, void **host, int *info, unsigned int *count);
-extern "C" unsigned int real_ncpus;
+extern "C" processor_t cpu_to_processor(int cpu);     /* processor_info() comes from <mach/mach_interface.h> */
 #define LV_MAX_CPUS         8
 static uint32_t last_busy[LV_MAX_CPUS], last_all[LV_MAX_CPUS];
 
@@ -40,12 +38,12 @@ cpu_load(unsigned *all_pct, unsigned *top_pct, int *top_cpu)
 	uint64_t busy = 0, total = 0;
 	*top_pct = 0;
 	*top_cpu = -1;
-	for (unsigned c = 0; c < real_ncpus && c < LV_MAX_CPUS; c++) {
-		void *p = cpu_to_processor((int)c);
-		int t[4] = { 0, 0, 0, 0 };
-		unsigned int n = 4;
-		void *host = NULL;
-		if (p == NULL || processor_info(p, 2 /* PROCESSOR_CPU_LOAD_INFO */, &host, t, &n) != 0) {
+	for (unsigned c = 0; c < LV_MAX_CPUS; c++) {      /* offline cpus (cpus=4) have no processor */
+		processor_t p = cpu_to_processor((int)c);
+		integer_t t[4] = { 0, 0, 0, 0 };
+		mach_msg_type_number_t n = 4;
+		host_t host = HOST_NULL;
+		if (p == PROCESSOR_NULL || processor_info(p, PROCESSOR_CPU_LOAD_INFO, &host, (processor_info_t)t, &n) != KERN_SUCCESS) {
 			continue;
 		}
 		uint32_t b = (uint32_t)t[0] + (uint32_t)t[1] + (uint32_t)t[3], a = b + (uint32_t)t[2];
