@@ -5,7 +5,7 @@ The kernel runs an iPhone X (D22AP) user space, so the identity is the iPhone's;
 value is the Redmi Note 7's (docs/HARDWARE.md). Node and property names such as `sweet-fbcon`,
 `sweet-io`, `qcom,kryo470` are the ones the base patch series (MakrSas/ios-topaz) matches on.
 
-usage: mkadt.py OUT.adt [--dump] [--product D22AP.adt]
+usage: mkadt.py OUT.adt [--dump] [--product D22AP.adt] [--baseband D22AP.adt]
   --product   copy /product from a real iPhone X device tree (Apple file, not in this repository);
               needed by user space later, not by the kernel
 """
@@ -44,7 +44,7 @@ def cstr(*strings):
     return b"".join(s.encode() + b"\0" for s in strings)
 
 
-def build(product_path=None, seed=None):
+def build(product_path=None, seed=None, baseband_path=None):
     counter = iter(range(1, 1000))
 
     def node(name, props=(), children=()):
@@ -140,6 +140,14 @@ def build(product_path=None, seed=None):
         props = [(k, cstr("sRGB") if k == "artwork-display-gamut" else v)
                  for k, flag, v in src.props if not flag and k not in ("name", "AAPL,phandle")]
         extra.append(node("product", props))
+    if baseband_path:
+        # /baseband as on the Qualcomm iPhone X: launchd then loads the cellular CommCenter job and
+        # libTelephonyBaseband finds its "config" timings. No function-* (they point at Apple GPIO/PMU
+        # nodes), no interrupts; device-imei stays the zero placeholder iBoot would fill.
+        real, _ = adt.parse(open(baseband_path, "rb").read())
+        src = real.child("baseband")
+        keep = ("device_type", "compatible", "config", "class", "imeisv", "device-imei", "region-sku")
+        extra.append(node("baseband", [(k, v) for k, flag, v in src.props if k in keep]))
 
     return node("device-tree", [
         ("compatible", cstr("D22AP", "iPhone10,3", "xiaomi,lavender", "xiaomi,sweet", "qcom,sdm660", "AppleARM")),
@@ -157,8 +165,9 @@ if __name__ == "__main__":
     ap.add_argument("out")
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--product")
+    ap.add_argument("--baseband", help="real iPhone X device tree to copy /baseband from")
     a = ap.parse_args()
-    blob = adt.serialize(build(a.product))
+    blob = adt.serialize(build(a.product, baseband_path=a.baseband))
     open(a.out, "wb").write(blob)
     if a.dump:
         adt.dump(adt.parse(blob)[0])

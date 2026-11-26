@@ -1,0 +1,45 @@
+lavender: AppleBaseband / AppleIPAppender stubs log every call with abp=1 (generator: xnu/src/mk_bbverbose.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index c1dc384..59eacc1 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -129,7 +129,37 @@ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
+ 	}
+ 	bool bb = OSDynamicCast(AppleBaseband, getProvider()) != NULL;
+ 	uint64_t *logged = bb ? &lv_bb_logged : &lv_pdp_logged;
+-	if (selector >= 64 || !(*logged & (1ULL << selector))) {
++	static int verbose = -1;
++	static unsigned calls[2];
++	if (verbose < 0) {
++		uint32_t abp = 0;
++		verbose = PE_parse_boot_argn("abp", &abp, sizeof(abp)) && abp != 0;
++	}
++	if (verbose > 0 && calls[bb]++ < 300) {
++		static const char *const bbn[] = {
++			"ResetModem", "PowerOnModem", "EnableModemMux", "GetReset", "4", "5", "PowercycleModem", "7", "EnableModemVBUS", "9",
++			"VoteDeviceWake", "GetPMUExtOn", "12", "13", "14", "Identify", "GetDiagReady", "GetFSEraseDone", "GetResetReq",
++			"SetModemCoredumpGPIO", "APTimeSync", "21", "SetManagerState", "GetManagerState", "24", "SetChargerDesense",
++			"GetBasebandState", "SetBasebandState", "GetBasebandProperty", "SetBasebandProperty", "ReportThermalData",
++			"DebugCommand", "ClearFreqList", "AddFreqList", "RemoveFreqList", "ResetSPMI",
++		};
++		char who[32], text[40];
++		proc_selfname(who, sizeof(who));
++		text[0] = 0;
++		if (bb && selector == 15 && args->structureInput != NULL && args->structureInputSize > 0) {
++			const char *src = (const char *)args->structureInput;
++			size_t n = 0;
++			while (n < sizeof(text) - 1 && n < args->structureInputSize && src[n] != 0) {
++				text[n] = src[n];
++				n++;
++			}
++			text[n] = 0;
++		}
++		IOLog("LV %s: %s %s(%u) in %u [%llx %llx] struct %u out %u/%u %s\n", bb ? "BB" : "PDP", who,
++		    bb && selector < sizeof(bbn) / sizeof(bbn[0]) ? bbn[selector] : "sel", selector, args->scalarInputCount,
++		    args->scalarInputCount > 0 ? args->scalarInput[0] : 0, args->scalarInputCount > 1 ? args->scalarInput[1] : 0,
++		    args->structureInputSize, args->scalarOutputCount, args->structureOutputSize, text);
++	} else if (selector >= 64 || !(*logged & (1ULL << selector))) {
+ 		if (selector < 64) {
+ 			*logged |= 1ULL << selector;
+ 		}

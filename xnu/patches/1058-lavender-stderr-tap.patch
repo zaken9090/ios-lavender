@@ -1,0 +1,73 @@
+lavender: sweetstderr=NAME copies a process's stderr writes into the kernel log (generator: xnu/src/mk_stderr.py)
+
+diff --git a/bsd/kern/sys_generic.c b/bsd/kern/sys_generic.c
+index 66a3528..ce95c5e 100644
+--- a/bsd/kern/sys_generic.c
++++ b/bsd/kern/sys_generic.c
+@@ -698,9 +698,50 @@ write_internal(struct proc *p, int fd, user_addr_t buf, user_size_t nbyte,
+ 	return writev_internal(p, fd, uio, flags, puguard, retval);
+ }
+ 
++/* lavender (xnu/src/mk_stderr.py): sweetstderr=NAME prints that process's stderr writes */
++extern boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
++static char sweet_stderr_name[32];
++static int sweet_stderr_on = -1;
++
++static int
++sweet_stderr_wanted(struct proc *p)
++{
++	if (sweet_stderr_on < 0) {
++		sweet_stderr_on = PE_parse_boot_argn("sweetstderr", sweet_stderr_name, sizeof(sweet_stderr_name)) &&
++		    sweet_stderr_name[0] != 0;
++	}
++	return sweet_stderr_on > 0 && strncmp(p->p_comm, sweet_stderr_name, strlen(sweet_stderr_name)) == 0;
++}
++
++static void
++sweet_stderr_tap(struct proc *p, user_addr_t buf, user_size_t len)
++{
++	char line[481];
++	size_t n = len < sizeof(line) - 1 ? (size_t)len : sizeof(line) - 1;
++
++	if (n == 0 || copyin(buf, line, n) != 0) {
++		return;
++	}
++	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
++		n--;
++	}
++	line[n] = 0;
++	for (size_t i = 0; i < n; i++) {
++		if (line[i] == '\n' || line[i] == '\r' || line[i] == '\t') {
++			line[i] = ' ';
++		} else if ((unsigned char)line[i] < 0x20) {
++			line[i] = '.';
++		}
++	}
++	printf("|%s| %s\n", p->p_comm, line);
++}
++
+ int
+ write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *retval)
+ {
++	if (uap->fd == 2 && sweet_stderr_wanted(p)) {
++		sweet_stderr_tap(p, uap->cbuf, uap->nbyte);
++	}
+ 	return write_internal(p, uap->fd, uap->cbuf, uap->nbyte, (off_t)-1, 0,
+ 	           NULL, retval);
+ }
+@@ -798,6 +839,15 @@ out:
+ int
+ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *retval)
+ {
++	if (uap->fd == 2 && uap->iovcnt > 0 && sweet_stderr_wanted(p)) {
++		struct user64_iovec v[8];
++		int cnt = uap->iovcnt < 8 ? uap->iovcnt : 8;
++		if (copyin(uap->iovp, v, sizeof(v[0]) * (size_t)cnt) == 0) {
++			for (int i = 0; i < cnt; i++) {
++				sweet_stderr_tap(p, v[i].iov_base, v[i].iov_len);
++			}
++		}
++	}
+ 	return writev_uio(p, uap->fd, uap->iovp, uap->iovcnt, 0, 0, NULL, retval);
+ }
+ 
