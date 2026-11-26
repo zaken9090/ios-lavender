@@ -1,0 +1,15 @@
+lavender: Bluetooth UART - IPR RXSTALE_LAST (generator: xnu/src/mk_bt28.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index dc20309..76a0403 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -101,7 +101,7 @@ static void
+ bt_uart_baud(uint32_t code)
+ {
+ 	wr(uart, U_CSR, code);
+-	wr(uart, U_IPR, 31 | (0 << 7));                          /* stale timeout */
++	wr(uart, U_IPR, 31 | 0x20);                              /* stale timeout 31, RXSTALE_LAST (msm_serial) */
+ 	wr(uart, U_RFWR, 48);
+ 	wr(uart, U_TFWR, 10);
+ 	wr(uart, U_CR, CR_PROTECTION_EN);
