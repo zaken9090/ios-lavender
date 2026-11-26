@@ -103,3 +103,4 @@ gcc_boot_rom_ahb_clk (mem): vote bit 10 of 0x52004, status at 0x38004. GCC_MSS_R
 Halt registers (stock DT, TCSR): q6 0x1f63000, modem 0x1f65000, nc 0x1f64000 (HALTREQ +0,
 HALTACK +4, IDLE +8). smp2p-mpss: items 435 (in) / 428 (out), mailbox apcs bit 14, SPI 451.
 SMEM 0x86000000 + 0x200000, hwlock tcsr-mutex 0x1f40000 lock 3. APCS 0x17911000.
+- 2026-11-26: steps 2-3 written (xnu 1044, 1045). Run 1 (no BIMC clock): everything up to the Q6 sequence works, PBL silent. Run 2 (BIMC clock gcc 0x4401c on): the phone dies within the second after the Q6 starts (USB gone, needs a manual fastboot). Not yet voted: RPM qdss clock, cx, mx (Linux proxy votes) - next thing to add before trying modem=1 again.
