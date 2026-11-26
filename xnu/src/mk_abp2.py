@@ -123,6 +123,7 @@ public:
 OSDefineMetaClassAndStructors(AppleBasebandPCIInterface, IOService);
 
 static IOLock *lv_abp_lock;
+static IOReturn lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count);
 static IOService *lv_abp_provider, *lv_abp_bb;
 static AppleBasebandPCIControl *lv_abp_ctl;
 static AppleBasebandPCIInterface *lv_abp_if[LV_ABP_NIF];
@@ -167,7 +168,7 @@ AppleBasebandPCIInterface::rx(const void *data, uint32_t len)
 		md->writeBytes(0, data, (IOByteCount)n);
 		md->complete();
 		md->release();
-		IOReturn r = IOUserClient::sendAsyncResult64(ref, kIOReturnSuccess, &n, 1);
+		IOReturn r = lv_abp_async_done(ref, kIOReturnSuccess, &n, 1);
 		IOLog("LV ABP %s: read completed, %llu bytes (%#x)\n", fName, n, r);
 		return;
 	}
@@ -302,9 +303,19 @@ public:
 	    IOExternalMethodDispatch *dispatch, OSObject *target,
 	    void *reference) APPLE_KEXT_OVERRIDE;
 	void modemSide(const uint8_t *data, uint32_t len);
+	static IOReturn asyncDone(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count)
+	{
+		return sendAsyncResult64(ref, result, args, count);     /* protected in IOUserClient */
+	}
 };
 
 OSDefineMetaClassAndStructors(SweetABPUserClient, IOUserClient);
+
+static IOReturn
+lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count)
+{
+	return SweetABPUserClient::asyncDone(ref, result, args, count);
+}
 
 bool
 SweetABPUserClient::start(IOService *provider)

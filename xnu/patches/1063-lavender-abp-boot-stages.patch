@@ -1,7 +1,7 @@
 lavender: baseband PCI services play the modem boot stages: interface matching by name, pbl registers, image accept, Sahara, mission interfaces (generator: xnu/src/mk_abp2.py)
 
 diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
-index 59eacc1..a5a4f37 100644
+index 59eacc1..d805ad8 100644
 --- a/iokit/Kernel/arm/SweetWatchdog.cpp
 +++ b/iokit/Kernel/arm/SweetWatchdog.cpp
 @@ -24,6 +24,13 @@
@@ -65,7 +65,7 @@ index 59eacc1..a5a4f37 100644
  	return true;
  }
  
-@@ -210,11 +221,29 @@ class AppleBasebandPCIInterface : public IOService {
+@@ -210,11 +221,30 @@ class AppleBasebandPCIInterface : public IOService {
  
  public:
  	const char *fName;
@@ -87,6 +87,7 @@ index 59eacc1..a5a4f37 100644
  OSDefineMetaClassAndStructors(AppleBasebandPCIInterface, IOService);
  
 +static IOLock *lv_abp_lock;
++static IOReturn lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count);
 +static IOService *lv_abp_provider, *lv_abp_bb;
 +static AppleBasebandPCIControl *lv_abp_ctl;
 +static AppleBasebandPCIInterface *lv_abp_if[LV_ABP_NIF];
@@ -95,7 +96,7 @@ index 59eacc1..a5a4f37 100644
  bool
  AppleBasebandPCIInterface::start(IOService *provider)
  {
-@@ -227,11 +256,159 @@ AppleBasebandPCIInterface::start(IOService *provider)
+@@ -227,11 +257,159 @@ AppleBasebandPCIInterface::start(IOService *provider)
  	return true;
  }
  
@@ -126,7 +127,7 @@ index 59eacc1..a5a4f37 100644
 +		md->writeBytes(0, data, (IOByteCount)n);
 +		md->complete();
 +		md->release();
-+		IOReturn r = IOUserClient::sendAsyncResult64(ref, kIOReturnSuccess, &n, 1);
++		IOReturn r = lv_abp_async_done(ref, kIOReturnSuccess, &n, 1);
 +		IOLog("LV ABP %s: read completed, %llu bytes (%#x)\n", fName, n, r);
 +		return;
 +	}
@@ -256,15 +257,25 @@ index 59eacc1..a5a4f37 100644
  	unsigned fCalls;
  
  public:
-@@ -240,6 +417,7 @@ public:
+@@ -240,16 +418,26 @@ public:
  	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
  	    IOExternalMethodDispatch *dispatch, OSObject *target,
  	    void *reference) APPLE_KEXT_OVERRIDE;
 +	void modemSide(const uint8_t *data, uint32_t len);
++	static IOReturn asyncDone(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count)
++	{
++		return sendAsyncResult64(ref, result, args, count);     /* protected in IOUserClient */
++	}
  };
  
  OSDefineMetaClassAndStructors(SweetABPUserClient, IOUserClient);
-@@ -247,9 +425,8 @@ OSDefineMetaClassAndStructors(SweetABPUserClient, IOUserClient);
+ 
++static IOReturn
++lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count)
++{
++	return SweetABPUserClient::asyncDone(ref, result, args, count);
++}
++
  bool
  SweetABPUserClient::start(IOService *provider)
  {
@@ -276,7 +287,7 @@ index 59eacc1..a5a4f37 100644
  	fCalls = 0;
  	char name[32];
  	proc_selfname(name, sizeof(name));
-@@ -261,32 +438,69 @@ IOReturn
+@@ -261,32 +449,69 @@ IOReturn
  SweetABPUserClient::clientClose(void)
  {
  	IOLog("LV ABP %s: closed\n", fWho);
@@ -355,7 +366,7 @@ index 59eacc1..a5a4f37 100644
  	}
  }
  
-@@ -298,9 +512,13 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+@@ -298,9 +523,13 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
  	bool async = args->asyncWakePort != MACH_PORT_NULL;
  	uint64_t in[4] = { 0, 0, 0, 0 };
  	char name[32], hex[128];
@@ -370,7 +381,7 @@ index 59eacc1..a5a4f37 100644
  
  	for (uint32_t i = 0; i < args->scalarInputCount && i < 4; i++) {
  		in[i] = args->scalarInput[i];
-@@ -308,47 +526,102 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+@@ -308,47 +537,102 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
  	for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
  		args->scalarOutput[i] = 0;
  	}
@@ -496,7 +507,7 @@ index 59eacc1..a5a4f37 100644
  		case 6: what = "abortChannel"; complete = 0; break;
  		case 7: what = "startChannel"; complete = 0; break;
  		case 8: what = "timeSync"; complete = 1; break;
-@@ -356,15 +629,15 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+@@ -356,15 +640,15 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
  		case 10: what = "unmapMemory"; complete = 0; break;
  		case 11: what = "registerTimeEvent"; break;
  		case 12: what = "deregisterTimeEvent"; complete = 0; break;
@@ -517,7 +528,7 @@ index 59eacc1..a5a4f37 100644
  		OSAsyncReference64 ref;
  		bzero(ref, sizeof(ref));
  		for (uint32_t i = 0; i < args->asyncReferenceCount && i < kOSAsyncRef64Count; i++) {
-@@ -372,7 +645,13 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+@@ -372,7 +656,13 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
  		}
  		(void)sendAsyncResult64(ref, kIOReturnSuccess, done, (uint32_t)complete);
  	}
@@ -532,7 +543,7 @@ index 59eacc1..a5a4f37 100644
  }
  
  bool
-@@ -400,31 +679,22 @@ IOWatchdog::start(IOService *provider)
+@@ -400,31 +690,22 @@ IOWatchdog::start(IOService *provider)
  		}
  		bb->release();
  	}
