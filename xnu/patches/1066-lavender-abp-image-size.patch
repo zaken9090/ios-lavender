@@ -1,0 +1,31 @@
+lavender: sendImage on pbl completes with the size transferred and a code (generator: xnu/src/mk_abp4.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 304bf78..8c95f3b 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -245,6 +245,7 @@ static IOReturn lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint6
+ static IOService *lv_abp_provider, *lv_abp_bb;
+ static AppleBasebandPCIControl *lv_abp_ctl;
+ static AppleBasebandPCIInterface *lv_abp_if[LV_ABP_NIF];
++static uint32_t lv_abp_imgcode;
+ static uint32_t lv_abp_stage, lv_abp_hold, lv_abp_ifs = 0xfe3c, lv_abp_chip = 0x0003B0E1, lv_abp_serial = 1, lv_abp_fused;
+ 
+ bool
+@@ -701,6 +702,8 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 		case 4:
+ 			what = "sendImage";
+ 			complete = 2;
++			done[0] = in[1];                        /* size transferred: must equal the image's size */
++			done[1] = lv_abp_imgcode;
+ 			if (!async && args->scalarOutputCount >= 2) {
+ 				args->scalarOutput[0] = 0;
+ 				args->scalarOutput[1] = 0;
+@@ -801,6 +804,7 @@ IOWatchdog::start(IOService *provider)
+ 		(void)PE_parse_boot_argn("abp_serial", &lv_abp_serial, sizeof(lv_abp_serial));
+ 		(void)PE_parse_boot_argn("abp_hold", &lv_abp_hold, sizeof(lv_abp_hold));
+ 		(void)PE_parse_boot_argn("abp_fused", &lv_abp_fused, sizeof(lv_abp_fused));
++		(void)PE_parse_boot_argn("abp_imgcode", &lv_abp_imgcode, sizeof(lv_abp_imgcode));
+ 		lv_abp_lock = IOLockAlloc();
+ 		lv_qmux_set_rx(lv_abp_qmux_rx);
+ 		lv_abp_provider = provider;
