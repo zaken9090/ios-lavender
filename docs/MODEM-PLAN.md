@@ -159,3 +159,9 @@ Each step is checked from the USB log; a SIM card and a call need the user.
   - modem_mode=0 (DMS online at start; CommCenter never sends SET_OPERATING_MODE itself): registered home, LTE, 3 bars.
   - Status bar shows **SOS**: CommCenter turns the registration into kEmergencyOnly because "No baseband activation ticket found" / "baseband activation status: false". That ticket comes from Apple's activation servers for a genuine iPhone; it is not faked here (decision pending with the user).
 - SIM: slot 1 of the tray (card status: slot 1 present, USIM). With the card in the wrong position slot 1 reports "error, no ATR".
+- 2026-11-26, **Wi-Fi steps 6 and 7 work** (kernel CI of 1080; boot-args `modem=1 lv_serror=1 modem_mode=0 wifi=1`, no modem_wlfw=0):
+  - 1077: board data right after `cap` (no MSA_READY indication from this firmware; ath10k does the same). 1078: CRC complaint (error 1) on the last board-data segment is not fatal (ath10k comment). -> FW_READY, wlan_cfg, mission mode.
+  - 1080: radio code on lavender addresses (membase 0x18800000, CE +0x240000, shadow +0x32000; anoc2 SMMU stream 0x1A00/1 via lv_wlan_smmu). -> 12 CE rings, HTC READY, WMI READY, passive scans every 15 s: 14 / 18 / 19 networks. The modem stays up.
+  - Open: firmware MAC is 00:00:00:00:00:00 (Android provisions it from persist; persist is read-only for us - decide with the user); iOS side (step 8: en0, wifid, Settings) not started; SpringBoard looks for `marconi-wifi`.
+  - Privacy: scan lines carry neighbours' network names (BSSIDs are masked); keep them out of docs and chat.
+- 1079 (pending reads completed "aborted" at close and at a baseband reset, per the libPCITransport analysis: an old transport lives until all its async reads complete, the new one waits 5 s for it then "Failed to engage router") is built but not yet seen in a reset.
