@@ -52,6 +52,9 @@ def main():
     ap.add_argument("--log")
     ap.add_argument("--steps", default="")
     ap.add_argument("--lock", action="store_true", help="save the lock screen first")
+    ap.add_argument("--burst", type=int, default=0,
+                    help="N pictures as fast as the link allows, starting right with the unlock swipe "
+                         "(ui_TAG_b00_<ms>.png, ms since the swipe), to catch flicker")
     a = ap.parse_args()
 
     path = usblog.device_path()
@@ -73,6 +76,16 @@ def main():
                 save(shot, f"ui_{a.tag}_1_lock")
         home = False
         shot = None
+        if a.burst:
+            # one unlock, pictures from the swipe on (no home check: the frames in between are the point)
+            wake(phone, rd)
+            t0 = time.time()
+            bench.cmd(phone, "lv:swipe 540 2200 540 900 250", 0.0)
+            for i in range(a.burst):
+                s = bench.screenshot(phone, rd, None)
+                if s:
+                    save(s, f"ui_{a.tag}_b{i:02d}_{int((time.time() - t0) * 1000):05d}")
+            return 0
         for _ in range(3):
             wake(phone, rd)
             m = rd.mark()

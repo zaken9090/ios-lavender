@@ -205,8 +205,15 @@ def main():
         if log:
             log.close()
 
+    # the kernel's last "temp:" line (xnu 1120/1121): GPU and hottest sensor, CPU load
+    temps = re.findall(rb"temp: gpu ([-\d.]+) C, hottest ([-\d.]+) C \(sensor (\d+)\)[^,]*, load (\d+)% \(busiest cpu (-?\d+) (\d+)%\)",
+                       bytes(rd.buf))
+    therm = ""
+    if temps:
+        g, h, s, ld, c, cp = (x.decode() for x in temps[-1])
+        therm = f" | gpu {g} C, hottest {h} C (s{s}), load {ld}% (cpu{c} {cp}%)"
     line = (f"BENCH {a.tag} {stamp} {'' if home else 'NOT-UNLOCKED '}"
-            f"home: {fps_stats(home_log)} | settings: {fps_stats(settings_log)}")
+            f"home: {fps_stats(home_log)} | settings: {fps_stats(settings_log)}{therm}")
     print(line)
     with open(a.results, "a", encoding="utf-8") as f:
         f.write(line + "\n")
