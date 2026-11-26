@@ -1,0 +1,25 @@
+lavender: Bluetooth - log the NVM layout (generator: xnu/src/mk_bt7.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 3d492bf..12e38cb 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -379,9 +379,18 @@ bt_download(const char *what, uint8_t *data, uint32_t size, bool patch)
+ 	}
+ 	if (!patch) {
+ 		uint32_t len = (data[1] | (data[2] << 8) | ((uint32_t)data[3] << 16));
++		for (uint32_t o = 0; o < 32 && o + 8 <= size; o += 8) {
++			LOG("nvm +%u: %02x %02x %02x %02x %02x %02x %02x %02x", o, data[o], data[o + 1], data[o + 2], data[o + 3], data[o + 4],
++			    data[o + 5], data[o + 6], data[o + 7]);
++		}
++		LOG("nvm: type %u length %u (file %u)", data[0], len, size);
++		unsigned ntag = 0;
+ 		for (uint32_t idx = 0; idx + 12 <= len && 4 + idx + 12 <= size;) {
+ 			uint8_t *t = data + 4 + idx;
+ 			uint16_t id = (uint16_t)(t[0] | (t[1] << 8)), tl = (uint16_t)(t[2] | (t[3] << 8));
++			if (ntag++ < 40) {
++				LOG("nvm tag at %u: id %u len %u", idx, id, tl);
++			}
+ 			if ((id == 17 || id == 27) && tl >= 4) {
+ 				LOG("nvm tag %u len %u: %02x %02x %02x %02x", id, tl, t[12], t[13], t[14], t[15]);
+ 			}
