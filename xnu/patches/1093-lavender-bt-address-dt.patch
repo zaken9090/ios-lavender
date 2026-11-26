@@ -1,0 +1,49 @@
+lavender: Bluetooth address in written order, into the device tree (generator: xnu/src/mk_bt9.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 4a2b287..9987b99 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -3,6 +3,7 @@
+  * Polled UARTDM v1.4 (Linux msm_serial.c), power-up of a WCN399x (Linux hci_qca.c, btqca.c).
+  */
+ #include <IOKit/IOLib.h>
++#include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <kern/thread.h>
+ #include <pexpert/pexpert.h>
+@@ -529,8 +530,23 @@ bt_setup(void)
+ 		LOG("local version: status %#x hci %u rev %#x lmp %u manufacturer %#x subversion %#x", ret[0], ret[1],
+ 		    ret[2] | (ret[3] << 8), ret[4], ret[5] | (ret[6] << 8), ret[7] | (ret[8] << 8));
+ 	}
+-	uint8_t addr[6];
+-	if (lv_bt_addr(addr)) {
++	uint8_t nv[6], addr[6];
++	if (lv_bt_addr(nv)) {
++		for (int i = 0; i < 6; i++) {
++			addr[i] = nv[5 - i];            /* written form */
++		}
++		IORegistryEntry *bt = IORegistryEntry::fromPath("/arm-io/uart1/bluetooth", gIODTPlane);
++		if (bt != NULL) {
++			OSData *d = OSData::withBytes(addr, 6);
++			if (d != NULL) {
++				bt->setProperty("local-mac-address", d);
++				d->release();
++			}
++			bt->release();
++			LOG("address %02x:%02x:%02x:**:**:** -> device tree", addr[0], addr[1], addr[2]);
++		} else {
++			LOG("no /arm-io/uart1/bluetooth node (mkadt.py --bt)");
++		}
+ 		if (bt_cmd_cc(0xFC14, addr, 6, ret, &rlen)) {
+ 			LOG("address set: status %#x", ret[0]);
+ 		} else {
+@@ -538,7 +554,7 @@ bt_setup(void)
+ 		}
+ 	}
+ 	if (bt_cmd_cc(0x1009, NULL, 0, ret, &rlen) && rlen >= 7) {
+-		LOG("BD_ADDR: status %#x, %02x:%02x:%02x:**:**:**", ret[0], ret[6], ret[5], ret[4]);
++		LOG("BD_ADDR: status %#x, %02x:%02x:%02x:**:**:** (written form)", ret[0], ret[6], ret[5], ret[4]);
+ 	}
+ 	LOG("B2 done");
+ }
