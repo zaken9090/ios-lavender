@@ -1,0 +1,44 @@
+lavender: Bluetooth control - trace every session (generator: xnu/src/mk_bt16.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 941c612..c2ce19d 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -666,7 +666,7 @@ ctl_up(const uint8_t *p, size_t n)
+ 	if (!ctl_on) {
+ 		return;
+ 	}
+-	if (trace_up++ < 200) {
++	if (!(n == 7 && p[4] == 0x4c && p[5] == 0xfc) && trace_up++ < 200) {
+ 		bt_trace("up", p, n);
+ 	}
+ 	IOLockLock(up_lock);
+@@ -681,7 +681,7 @@ ctl_up(const uint8_t *p, size_t n)
+ static void
+ tx_packet(const uint8_t *p, uint32_t n)
+ {
+-	if (trace_down++ < 200) {
++	if (!(n >= 3 && p[0] == 0x01 && p[1] == 0x4c && p[2] == 0xfc) && trace_down++ < 200) {
+ 		bt_trace("down", p, n);
+ 	}
+ 	if (p[0] == 0x01 && n >= 4) {
+@@ -713,7 +713,10 @@ btc_send(kern_ctl_ref, u_int32_t, void *, mbuf_t m, int)
+ 			case 0x01: need = tx_have >= 4 ? 4u + tx_pkt[3] : 0; break;
+ 			case 0x02: need = tx_have >= 5 ? 5u + (tx_pkt[3] | (tx_pkt[4] << 8)) : 0; break;
+ 			case 0x03: need = tx_have >= 4 ? 4u + tx_pkt[3] : 0; break;
+-			default: need = 1; break;               /* not H4: pass the byte on */
++			default:
++				need = 1;                       /* not H4: pass the byte on */
++				LOG("tx: byte %#04x outside a packet", tx_pkt[0]);
++				break;
+ 			}
+ 			if (need > sizeof(tx_pkt)) {
+ 				LOG("tx: packet of %u bytes too long, dropped", need);
+@@ -737,6 +740,7 @@ btc_connect(kern_ctl_ref, struct sockaddr_ctl *sac, void **)
+ 	}
+ 	ctl_unit = sac->sc_unit;
+ 	tx_have = 0;
++	trace_up = trace_down = 0;
+ 	ctl_on = true;
+ 	LOG("com.apple.uart.bluetooth: connected (unit %u)", ctl_unit);
+ 	return 0;
