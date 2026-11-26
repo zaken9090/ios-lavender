@@ -1,0 +1,28 @@
+lavender: audio A3 - APR payload after the packet header length (generator: xnu/src/mk_audio5.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 4a5f411..12c14dc 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1176,9 +1176,19 @@ apr_rx(const uint8_t *data, uint32_t len)
+ 		LOG("APR: short packet (%u bytes)", len);
+ 		return;
+ 	}
+-	const uint32_t *p = (const uint32_t *)(data + sizeof(*h));
+-	uint32_t n = (len - (uint32_t)sizeof(*h)) / 4;
++	uint32_t hlen = ((h->hdr_field >> 4) & 0xF) * 4u;
++	if (hlen < 8 || hlen > len) {
++		hlen = (uint32_t)sizeof(*h);
++	}
++	const uint32_t *p = (const uint32_t *)(data + hlen);
++	uint32_t n = (len - hlen) / 4;
+ 	apr_rxn++;
++	if (apr_rxn <= 3) {
++		const uint32_t *w = (const uint32_t *)data;
++		LOG("APR: raw %u bytes (hdr_field %#x, header %u): %08x %08x %08x %08x %08x %08x %08x %08x", len, h->hdr_field, hlen,
++		    w[0], len > 4 ? w[1] : 0, len > 8 ? w[2] : 0, len > 12 ? w[3] : 0, len > 16 ? w[4] : 0, len > 20 ? w[5] : 0,
++		    len > 24 ? w[6] : 0, len > 28 ? w[7] : 0);
++	}
+ 	if (h->opcode == AVCS_GET_STATE_RSP && n >= 1) {
+ 		if (p[0] != apr_core_state) {
+ 			LOG("APR: ADSP core state %u%s (after %u asks)", p[0], p[0] == 1 ? " READY" : "", apr_asks);
