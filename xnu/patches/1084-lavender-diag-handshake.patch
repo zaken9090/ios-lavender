@@ -1,0 +1,86 @@
+lavender: DIAG control handshake (feature mask) before the NV reads of the Wi-Fi MAC and Bluetooth address (generator: xnu/src/mk_diagcntl.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 4992ba5..c74103f 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -803,6 +803,32 @@ static unsigned q_odd;
+ #define PORT_UIMC           0x4006              /* our QMI client port towards UIM (mk_uimprov.py) */
+ #define PORT_DIAGC          0x4013              /* our DIAG command client (mk_wlanmacnv.py) */
+ static bool nv_mac_asked, nv_mac_done, persist_mac_done;
++static bool diag_cmd_known, diag_cntl_done, diag_nv_sent;
++static uint32_t diag_cmd_node, diag_cmd_port;
++static uint8_t bt_addr_nv[6];                           /* for the Bluetooth driver later */
++
++static void
++diag_nv_read(uint16_t item)
++{
++	uint8_t req[133];
++	bzero(req, sizeof(req));
++	req[0] = 0x26;                                  /* NV_READ_F */
++	req[1] = (uint8_t)item;
++	req[2] = (uint8_t)(item >> 8);
++	qrtr_send(QRTR_TYPE_DATA, PORT_DIAGC, diag_cmd_node, diag_cmd_port, req, sizeof(req));
++}
++
++/* the NV reads, once the modem's command service is known and the control handshake is done */
++static void
++diag_nv_maybe_ask(void)
++{
++	if (!diag_nv_sent && diag_cmd_known && diag_cntl_done) {
++		diag_nv_sent = true;
++		diag_nv_read(4678);                     /* WLAN MAC */
++		diag_nv_read(447);                      /* Bluetooth address */
++		LOG("wlan mac: NV 4678 and 447 asked from the modem's DIAG (%u:%x)", diag_cmd_node, diag_cmd_port);
++	}
++}
+ static uint8_t nv_mac[6];
+ static void wlan_mac_set(const uint8_t *m);
+ 
+@@ -891,13 +917,10 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+ 			nv_mac_asked = true;
+ 			(void)PE_parse_boot_argn("modem_macnv", &on, sizeof(on));
+ 			if (on != 0) {
+-				uint8_t req[133];
+-				bzero(req, sizeof(req));
+-				req[0] = 0x26;
+-				req[1] = 4678 & 0xff;
+-				req[2] = 4678 >> 8;
+-				qrtr_send(QRTR_TYPE_DATA, PORT_DIAGC, c->c, c->d, req, sizeof(req));
+-				LOG("wlan mac: NV 4678 asked from the modem's DIAG (%u:%x)", c->c, c->d);
++				diag_cmd_node = c->c;                   /* asked after the control handshake (mk_diagcntl.py) */
++				diag_cmd_port = c->d;
++				diag_cmd_known = true;
++				diag_nv_maybe_ask();
+ 			}
+ 		}
+ 		if (c->a == 2 && !dms_mode_sent) {              /* DMS: the wanted operating mode, once (mk_modemmode.py) */
+@@ -5767,6 +5790,13 @@ uim_prov_rx(const uint8_t *d, uint32_t len)
+ static bool
+ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
+ {
++	if (dst_port == PORT_DIAGC && len >= 3 + 6 && data[0] == 0x26 && data[1] == (447 & 0xff) && data[2] == (447 >> 8)) {
++		uint16_t st = len >= 133 ? (uint16_t)(data[131] | (data[132] << 8)) : 0;
++		memcpy(bt_addr_nv, data + 3, 6);
++		LOG("bt addr: NV 447 status %u: as stored %02x:%02x:%02x:**:**:**, reversed %02x:%02x:%02x:**:**:**", st, data[3], data[4],
++		    data[5], data[8], data[7], data[6]);
++		return true;
++	}
+ 	if (dst_port == PORT_DIAGC) {
+ 		if (!nv_mac_rx(data, len)) {
+ 			LOG("t=%u ms: DIAG answer to our command, %u bytes: %02x %02x %02x %02x", g_ms, len, len > 0 ? data[0] : 0,
+@@ -5774,6 +5804,14 @@ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *d
+ 		}
+ 		return true;
+ 	}
++	if (dst_port == PORT_DIAG && !diag_cntl_done && len >= 8 && data[0] == 8 && data[1] == 0 && data[2] == 0 && data[3] == 0) {
++		/* DIAG_CTRL_MSG_FEATURE {id 8, data_len 6, mask_len 2, mask}: mask support, separate cmd/rsp, sockets */
++		uint8_t fm[14] = { 8, 0, 0, 0, 6, 0, 0, 0, 2, 0, 0, 0, 0x11, 0x20 };
++		qrtr_send(QRTR_TYPE_DATA, PORT_DIAG, src_node, src_port, fm, sizeof(fm));
++		diag_cntl_done = true;
++		LOG("t=%u ms: DIAG: feature mask answered to %u:%x", g_ms, src_node, src_port);
++		diag_nv_maybe_ask();
++	}
+ 	if (dst_port >= PORT_DIAG && dst_port < PORT_DIAG + 3 && !nv_mac_done) {
+ 		(void)nv_mac_rx(data, len);
+ 	}
