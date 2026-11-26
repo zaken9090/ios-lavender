@@ -1,0 +1,102 @@
+lavender: Bluetooth control - whole H4 packets up, byte trace (generator: xnu/src/mk_bt13.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index d466820..5c5a308 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -644,11 +644,36 @@ static uint8_t termios_saved[0x48];
+ static uint8_t tx_pkt[2048];
+ static uint32_t tx_have, vendor_logged;
+ 
++static IOLock *up_lock;
++static uint32_t trace_up, trace_down;
++
++static void
++bt_trace(const char *dir, const uint8_t *p, size_t n)
++{
++	char line[3 * 16 + 1];
++	size_t k = n < 16 ? n : 16;
++	for (size_t i = 0; i < k; i++) {
++		snprintf(line + 3 * i, 4, "%02x ", p[i]);
++	}
++	line[3 * k] = 0;
++	LOG("%s %zu: %s", dir, n, line);
++}
++
++/* one whole packet to the connected socket */
+ static void
+ ctl_up(const uint8_t *p, size_t n)
+ {
+-	if (ctl_on && ctl_enqueuedata(ctl_ref, ctl_unit, (void *)(uintptr_t)p, n, 0) != 0) {
+-		LOG("socket full: %zu bytes dropped", n);
++	if (!ctl_on) {
++		return;
++	}
++	if (trace_up++ < 200) {
++		bt_trace("up", p, n);
++	}
++	IOLockLock(up_lock);
++	errno_t e = ctl_enqueuedata(ctl_ref, ctl_unit, (void *)(uintptr_t)p, n, 0);
++	IOLockUnlock(up_lock);
++	if (e != 0) {
++		LOG("socket full (%d): %zu bytes dropped", e, n);
+ 	}
+ }
+ 
+@@ -656,6 +681,9 @@ ctl_up(const uint8_t *p, size_t n)
+ static void
+ tx_packet(const uint8_t *p, uint32_t n)
+ {
++	if (trace_down++ < 200) {
++		bt_trace("down", p, n);
++	}
+ 	if (p[0] == 0x01 && n >= 4) {
+ 		uint16_t op = (uint16_t)(p[1] | (p[2] << 8));
+ 		if (op >= 0xFC00) {
+@@ -770,6 +798,7 @@ bt_serve(void)
+ 	reg.ctl_setopt = btc_setopt;
+ 	reg.ctl_getopt = btc_getopt;
+ 	tx_lock = IOLockAlloc();
++	up_lock = IOLockAlloc();
+ 	/* termios as a tty would start: 115200 8N1, CREAD|CLOCAL|CRTSCTS */
+ 	uint64_t cflag = 0x38B00, speed = 115200;
+ 	memcpy(termios_saved + 0x10, &cflag, 8);
+@@ -781,17 +810,30 @@ bt_serve(void)
+ 		return;
+ 	}
+ 	bt_ready = true;
+-	uint8_t chunk[256];
++	static uint8_t pkt[4 + 65536];
++	uint32_t have = 0;
+ 	for (;;) {
+-		uint32_t n = 0;
+ 		bt_rx_poll();
+-		while (rx_head != rx_tail && n < sizeof(chunk)) {
+-			chunk[n++] = rx_ring[rx_head++ % sizeof(rx_ring)];
+-		}
+-		if (n != 0) {
+-			ctl_up(chunk, n);       /* dropped when nobody is connected */
+-		} else {
++		if (rx_head == rx_tail) {
+ 			IOSleep(1);
++			continue;
++		}
++		while (rx_head != rx_tail) {
++			pkt[have++] = rx_ring[rx_head++ % sizeof(rx_ring)];
++			uint32_t need = 0;
++			switch (pkt[0]) {
++			case 0x04: need = have >= 3 ? 3u + pkt[2] : 0; break;
++			case 0x02: need = have >= 5 ? 5u + (pkt[3] | (pkt[4] << 8)) : 0; break;
++			case 0x03: need = have >= 4 ? 4u + pkt[3] : 0; break;
++			default:
++				LOG("rx: stray byte %#04x", pkt[0]);
++				have = 0;
++				continue;
++			}
++			if (need != 0 && have >= need) {
++				ctl_up(pkt, need);      /* dropped when nobody is connected */
++				have = 0;
++			}
+ 		}
+ 	}
+ }
