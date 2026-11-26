@@ -1,0 +1,40 @@
+lavender: Bluetooth control - force stale, stuck packet and overrun diagnostics (generator: xnu/src/mk_bt22.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 0e6073f..7e60c87 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -825,13 +825,32 @@ bt_serve(void)
+ 	}
+ 	bt_ready = true;
+ 	static uint8_t pkt[4 + 65536];
+-	uint32_t have = 0;
++	uint32_t have = 0, idle_ms = 0, overruns = 0;
+ 	for (;;) {
++		uint32_t sr = rd(uart, U_SR);
++		if (sr & (1u << 4)) {
++			wr(uart, U_CR, CR_RESET_ERR);
++			if (overruns++ < 20) {
++				LOG("rx: UART overrun (%u)", overruns);
++			}
++		}
+ 		bt_rx_poll();
+ 		if (rx_head == rx_tail) {
+ 			IOSleep(1);
++			idle_ms++;
++			if (idle_ms == 5 && rx_taken != 0) {
++				wr(uart, U_CR, CR_FORCE_STALE);         /* the tail of this transfer out of the FIFO */
++			}
++			if (idle_ms == 50 && have != 0) {
++				uint32_t need = pkt[0] == 0x04 && have >= 3 ? 3u + pkt[2] :
++				    pkt[0] == 0x02 && have >= 5 ? 5u + (pkt[3] | (pkt[4] << 8)) : 0;
++				LOG("rx: packet stuck: %02x %02x %02x %02x %02x have %u need %u - dropped", pkt[0], pkt[1], pkt[2],
++				    pkt[3], pkt[4], have, need);
++				have = 0;
++			}
+ 			continue;
+ 		}
++		idle_ms = 0;
+ 		while (rx_head != rx_tail) {
+ 			pkt[have++] = rx_ring[rx_head++ % sizeof(rx_ring)];
+ 			uint32_t need = 0;
