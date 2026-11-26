@@ -1,0 +1,22 @@
+lavender: the next Sahara session starts on the same open interface after DONE_RESP (generator: xnu/src/mk_abp6.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 35b7b9c..b290ff8 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -718,6 +718,15 @@ SweetABPUserClient::modemSide(const uint8_t *data, uint32_t len)
+ 		if (lv_abp_stage != LV_ABP_MISSION && lv_abp_hold == 0) {
+ 			lv_abp_set_stage(LV_ABP_MISSION);
+ 		}
++		{
++			/* what was sent is "running" now and speaks next: the HELLO of the following session */
++			uint32_t hello[12] = { 1, 0x30, 2, 1, 0x400, 0, 0, 0, 0, 0, 0, 0 };
++			lv_sah_session++;
++			lv_sah_served = 0;
++			lv_sah_done = false;
++			IOLog("LV ABP sahara: session %d begins on the open interface: HELLO\n", lv_sah_session);
++			fItf->rx(hello, sizeof(hello));
++		}
+ 		break;
+ 	default:
+ 		IOLog("LV ABP sahara: session %d: command %u (%u bytes) not answered\n", lv_sah_session, cmd, len);
