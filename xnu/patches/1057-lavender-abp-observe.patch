@@ -1,0 +1,257 @@
+lavender: AppleBasebandPCIControl / AppleBasebandPCIInterface services that accept and log every call (abp=1), step T2 of telephony (generator: xnu/src/mk_abp.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index bcf001f..c1dc384 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -23,6 +23,7 @@
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <sys/proc.h>
++#include <pexpert/pexpert.h>
+ 
+ class IOWatchdog : public IOService {
+ 	OSDeclareDefaultStructors(IOWatchdog);
+@@ -141,6 +142,209 @@ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
+ 	return kIOReturnSuccess;
+ }
+ 
++/*
++ * lavender: Apple's baseband PCI services, step T2 (xnu/src/mk_abp.py, docs/ABP-ABI.md).
++ */
++static const char *const lv_abp_names[21] = {
++	"pbl", "sahara", "diag", "refs", "qmux1", "qmux2", "rom", "boot", "ari", "trace", "at", "dpl", "mediactl", "vcom",
++	"gnss", "qdss", NULL, "virtual_timesync", NULL, NULL, "boot_logger",
++};
++
++class AppleBasebandPCIControl : public IOService {
++	OSDeclareDefaultStructors(AppleBasebandPCIControl);
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleBasebandPCIControl, IOService);
++
++bool
++AppleBasebandPCIControl::start(IOService *provider)
++{
++	uint32_t stage = 2;
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	(void)PE_parse_boot_argn("abp_stage", &stage, sizeof(stage));
++	setProperty("bootstage", stage, 32);
++	setProperty("logSnapshotBufferSize", 0x1000ULL, 32);
++	setProperty(kIOUserClientClassKey, "SweetABPUserClient");
++	registerService();
++	IOLog("LV ABP: AppleBasebandPCIControl registered, bootstage %u\n", stage);
++	return true;
++}
++
++class AppleBasebandPCIInterface : public IOService {
++	OSDeclareDefaultStructors(AppleBasebandPCIInterface);
++
++public:
++	const char *fName;
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(AppleBasebandPCIInterface, IOService);
++
++bool
++AppleBasebandPCIInterface::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty("ABPInterfaceProtocol", fName);
++	setProperty(kIOUserClientClassKey, "SweetABPUserClient");
++	registerService();
++	return true;
++}
++
++class SweetABPUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(SweetABPUserClient);
++
++	const char *fWho;
++	bool fControl;
++	unsigned fCalls;
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target,
++	    void *reference) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(SweetABPUserClient, IOUserClient);
++
++bool
++SweetABPUserClient::start(IOService *provider)
++{
++	AppleBasebandPCIInterface *i = OSDynamicCast(AppleBasebandPCIInterface, provider);
++	fControl = i == NULL;
++	fWho = i != NULL ? i->fName : "control";
++	fCalls = 0;
++	char name[32];
++	proc_selfname(name, sizeof(name));
++	IOLog("LV ABP %s: opened by %s\n", fWho, name);
++	return IOUserClient::start(provider);
++}
++
++IOReturn
++SweetABPUserClient::clientClose(void)
++{
++	IOLog("LV ABP %s: closed\n", fWho);
++	terminate();
++	return kIOReturnSuccess;
++}
++
++/* the first bytes of a buffer of the calling task, as hex */
++static void
++lv_abp_hex(char *out, size_t outsz, uint64_t va, uint64_t len, const void *kbuf)
++{
++	uint8_t b[40];
++	size_t n = len < sizeof(b) ? (size_t)len : sizeof(b), got = 0;
++	out[0] = 0;
++	if (kbuf != NULL) {
++		bcopy(kbuf, b, n);
++		got = n;
++	} else if (va != 0 && n != 0) {
++		IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(va, n, kIODirectionOut, current_task());
++		if (md != NULL) {
++			if (md->prepare() == kIOReturnSuccess) {
++				got = md->readBytes(0, b, n);
++				md->complete();
++			}
++			md->release();
++		}
++	}
++	for (size_t i = 0; i < got && 3 * i + 4 < outsz; i++) {
++		snprintf(out + 3 * i, 4, "%02x ", b[i]);
++	}
++}
++
++IOReturn
++SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
++    __unused void *reference)
++{
++	bool async = args->asyncWakePort != MACH_PORT_NULL;
++	uint64_t in[4] = { 0, 0, 0, 0 };
++	char name[32], hex[128];
++	const char *what = "";
++	uint64_t done[2] = { 0, 0 };
++	int complete = -1;                              /* number of completion arguments, -1: stays pending */
++
++	for (uint32_t i = 0; i < args->scalarInputCount && i < 4; i++) {
++		in[i] = args->scalarInput[i];
++	}
++	for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
++		args->scalarOutput[i] = 0;
++	}
++	if (args->structureOutputDescriptor != NULL) {
++		IOByteCount len = args->structureOutputDescriptor->getLength();
++		for (IOByteCount off = 0; off < len; off += 8) {
++			static const uint64_t zero = 0;
++			args->structureOutputDescriptor->writeBytes(off, &zero, len - off < 8 ? len - off : 8);
++		}
++	} else if (args->structureOutput != NULL) {
++		bzero(args->structureOutput, args->structureOutputSize);
++	}
++	hex[0] = 0;
++	proc_selfname(name, sizeof(name));
++	if (fControl) {
++		switch (selector) {
++		case 0: what = "open"; break;
++		case 1: what = "close"; break;
++		case 2: what = "readLogs"; break;
++		case 3: what = "loggerTune"; break;
++		default: what = "?"; break;
++		}
++	} else {
++		switch (selector) {
++		case 0: what = "open"; break;
++		case 1: what = "close"; break;
++		case 2:
++			what = "write";
++			if (async) {
++				lv_abp_hex(hex, sizeof(hex), in[0], in[1], NULL);
++				done[0] = in[1];
++				complete = 1;
++			} else if (args->structureInput != NULL) {
++				lv_abp_hex(hex, sizeof(hex), 0, args->structureInputSize, args->structureInput);
++			}
++			break;
++		case 3:
++			what = "read";
++			if (!async) {
++				args->structureOutputSize = 0;
++			}
++			break;
++		case 4: what = "sendImage"; complete = 2; break;
++		case 5: what = "readRegister"; break;
++		case 6: what = "abortChannel"; complete = 0; break;
++		case 7: what = "startChannel"; complete = 0; break;
++		case 8: what = "timeSync"; complete = 1; break;
++		case 9: what = "mapMemory"; complete = 0; break;
++		case 10: what = "unmapMemory"; complete = 0; break;
++		case 11: what = "registerTimeEvent"; break;
++		case 12: what = "deregisterTimeEvent"; complete = 0; break;
++		default: what = "?"; break;
++		}
++	}
++	if (fCalls++ < 400) {
++		IOLog("LV ABP %s: %s %s(%u)%s in %u [%llx %llx %llx %llx] struct in %u out %u/%u%s%s\n", fWho, name, what, selector,
++		    async ? " async" : "", args->scalarInputCount, in[0], in[1], in[2], in[3], args->structureInputSize,
++		    args->scalarOutputCount, args->structureOutputSize, hex[0] ? " data " : "", hex);
++	}
++	if (async && complete >= 0) {
++		OSAsyncReference64 ref;
++		bzero(ref, sizeof(ref));
++		for (uint32_t i = 0; i < args->asyncReferenceCount && i < kOSAsyncRef64Count; i++) {
++			ref[i] = args->asyncReference[i];
++		}
++		(void)sendAsyncResult64(ref, kIOReturnSuccess, done, (uint32_t)complete);
++	}
++	return kIOReturnSuccess;
++}
++
+ bool
+ IOWatchdog::start(IOService *provider)
+ {
+@@ -166,6 +370,32 @@ IOWatchdog::start(IOService *provider)
+ 		}
+ 		bb->release();
+ 	}
++	uint32_t abp = 0, ifs = 0xfe3c;
++	(void)PE_parse_boot_argn("abp", &abp, sizeof(abp));
++	(void)PE_parse_boot_argn("abp_ifs", &ifs, sizeof(ifs));
++	if (abp != 0) {
++		AppleBasebandPCIControl *ctl = OSTypeAlloc(AppleBasebandPCIControl);
++		if (ctl != NULL) {
++			if (!ctl->init() || !ctl->attach(provider) || !ctl->start(provider)) {
++				IOLog("LV ABP: AppleBasebandPCIControl did not start\n");
++			}
++			ctl->release();
++		}
++		for (unsigned i = 0; i < 21; i++) {
++			if (lv_abp_names[i] == NULL || !(ifs & (1u << i))) {
++				continue;
++			}
++			AppleBasebandPCIInterface *itf = OSTypeAlloc(AppleBasebandPCIInterface);
++			if (itf != NULL) {
++				itf->fName = lv_abp_names[i];
++				if (!itf->init() || !itf->attach(provider) || !itf->start(provider)) {
++					IOLog("LV ABP: interface %s did not start\n", lv_abp_names[i]);
++				}
++				itf->release();
++			}
++		}
++		IOLog("LV ABP: interfaces %#x registered\n", ifs);
++	}
+ 	return true;
+ }
+ 
