@@ -1,0 +1,158 @@
+lavender: audio A4b - amplifier and tone tunables as boot-args, SD0 check (generator: xnu/src/mk_audio11.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 4791c18..d894108 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1510,6 +1510,94 @@ a4b_write_done(uint32_t addr_lsw, uint32_t status)
+ 	}
+ }
+ 
++/* a number: 0x.. hex or decimal (own parser: no libc here) */
++static unsigned long
++lv_num(const char *p, char **end)
++{
++	unsigned long v = 0;
++	int base = 10;
++	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
++		base = 16;
++		p += 2;
++	}
++	for (;; p++) {
++		int d = (*p >= '0' && *p <= '9') ? *p - '0' : (base == 16 && *p >= 'a' && *p <= 'f') ? *p - 'a' + 10 :
++		    (base == 16 && *p >= 'A' && *p <= 'F') ? *p - 'A' + 10 : -1;
++		if (d < 0) {
++			break;
++		}
++		v = v * (unsigned long)base + (unsigned long)d;
++	}
++	*end = (char *)(uintptr_t)p;
++	return v;
++}
++
++/* "0x3a=0x1,0xff=0x1": hex/dec pairs; writes them to the amplifier (mk_audio11.py) */
++static void
++amp_list_write(const char *arg)
++{
++	char buf[256];
++	if (!PE_parse_boot_argn(arg, buf, sizeof(buf))) {
++		return;
++	}
++	const char *p = buf;
++	while (*p != 0) {
++		char *e;
++		unsigned long r = lv_num(p, &e);
++		if (*e != '=') {
++			break;
++		}
++		unsigned long v = lv_num(e + 1, &e);
++		LOG("%s: 0x%04lx = 0x%02lx -> %d (read back %#x)", arg, r, v, lv_amp_write((uint16_t)r, (uint8_t)v), lv_amp_read((uint16_t)r));
++		p = *e == ',' ? e + 1 : e;
++		if (*e != ',') {
++			break;
++		}
++	}
++}
++
++static void
++amp_list_read(void)
++{
++	char buf[256] = "0x3a,0xff,0x11,0x1,0x2,0x3,0x4,0x5,0x6";
++	(void)PE_parse_boot_argn("audio_amp_read", buf, sizeof(buf));
++	char line[256];
++	unsigned n = 0;
++	const char *p = buf;
++	while (*p != 0 && n < sizeof(line) - 16) {
++		char *e;
++		unsigned long r = lv_num(p, &e);
++		if (e == p) {
++			break;
++		}
++		n += (unsigned)snprintf(line + n, sizeof(line) - n, "%lx=%x ", r, lv_amp_read((uint16_t)r));
++		p = *e == ',' ? e + 1 : e;
++		if (*e != ',') {
++			break;
++		}
++	}
++	line[n] = 0;
++	LOG("max98927 playing: %s", line);
++}
++
++/* GPIO 14 = SD0: level changes over 20000 reads (silence keeps it low) */
++static void
++sd0_sample(void)
++{
++	volatile uint32_t *g = (volatile uint32_t *)ml_io_map(0x03900000 + 0x1000 * 14, 0x1000);
++	if (g == NULL) {
++		return;
++	}
++	unsigned hi = 0, edges = 0, last = g[1] & 1;
++	for (unsigned i = 0; i < 20000; i++) {
++		unsigned v = g[1] & 1;
++		hi += v;
++		edges += v != last;
++		last = v;
++	}
++	LOG("SD0 (GPIO 14): %u of 20000 high, %u level changes", hi, edges);
++}
++
+ static bool
+ a4b_buffers(void)
+ {
+@@ -1524,12 +1612,22 @@ a4b_buffers(void)
+ 		7094, 6498, 5793, 4987, 4096, 3135, 2120, 1069, 0, -1069, -2120, -3135, -4096, -4987, -5793, -6498,
+ 		-7094, -7568, -7913, -8122, -8192, -8122, -7913, -7568, -7094, -6498, -5793, -4987, -4096, -3135, -2120, -1069,
+ 	};
++	uint32_t level = 8192, freq = 1000;
++	(void)PE_parse_boot_argn("audio_level", &level, sizeof(level));
++	(void)PE_parse_boot_argn("audio_freq", &freq, sizeof(freq));
++	level = level > 30000 ? 30000 : level;
++	/* 960 frames a buffer: 250/500/1000/2000/4000 Hz give whole cycles (step through the 48-point table) */
++	uint32_t step = freq == 250 ? 0 : freq == 500 ? 0 : freq == 2000 ? 2 : freq == 4000 ? 4 : 1;
++	uint32_t slow = freq == 250 ? 4 : freq == 500 ? 2 : 1;
+ 	for (unsigned b = 0; b < A4_BUF_N; b++) {
+ 		int16_t *s16 = (int16_t *)(a4_va + 4096u * b);
+ 		for (unsigned f = 0; f < A4_BUF_BYTES / 4; f++) {
+-			s16[2 * f] = s16[2 * f + 1] = sine[f % 48];
++			unsigned k = step != 0 ? (f * step) % 48 : (f / slow) % 48;
++			int32_t v = (int32_t)sine[k] * (int32_t)level / 8192;
++			s16[2 * f] = s16[2 * f + 1] = (int16_t)v;
+ 		}
+ 	}
++	LOG("A4b: tone %u Hz, peak %u", freq, level);
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ 	LOG("A4b: 4 tone buffers at %#llx", a4_pa);
+ 	return true;
+@@ -1541,6 +1639,7 @@ a4b_play(void)
+ 	uint32_t st;
+ 	uint16_t copp = 0xFFFF;
+ 	bool mapped = false, asm_open = false, adm_open = false;
++	amp_list_write("audio_amp");
+ 	if (!lpass_smmu_sid1() || !a4b_buffers()) {
+ 		return;
+ 	}
+@@ -1615,7 +1714,14 @@ a4b_play(void)
+ 	{
+ 		uint32_t r[3] = { 0, 0, 0 };
+ 		if (apr_call("ASM run", 7, 0x0101, 0x0101, 0x00010DAAu, r, sizeof(r), &st)) {
+-			LOG("A4b: amp on: AMP_EN %d GLOBAL_EN %d", lv_amp_write(0x003A, 0x01), lv_amp_write(0x00FF, 0x01));
++			char on[8];
++			if (PE_parse_boot_argn("audio_amp_on", on, sizeof(on))) {
++				amp_list_write("audio_amp_on");
++			} else {
++				LOG("A4b: amp on: AMP_EN %d GLOBAL_EN %d", lv_amp_write(0x003A, 0x01), lv_amp_write(0x00FF, 0x01));
++			}
++			LOG("A4b: read back AMP_EN %#x GLOBAL_EN %#x", lv_amp_read(0x003A), lv_amp_read(0x00FF));
++			sd0_sample();
+ 			uint32_t secs = 3;
+ 			(void)PE_parse_boot_argn("audio_secs", &secs, sizeof(secs));
+ 			secs = secs == 0 ? 3 : (secs > 30 ? 30 : secs);
+@@ -1627,7 +1733,7 @@ a4b_play(void)
+ 				qrtr_poll();
+ 				if (ms() - last >= 1000) {
+ 					last = ms();
+-					amp_status("playing");
++					amp_list_read();
+ 				}
+ 			}
+ 			LOG("A4b: amp off: GLOBAL_EN %d AMP_EN %d", lv_amp_write(0x00FF, 0x00), lv_amp_write(0x003A, 0x00));
