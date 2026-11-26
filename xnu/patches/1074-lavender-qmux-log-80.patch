@@ -1,0 +1,24 @@
+lavender: QMUX trace shows 80 bytes of each message (generator: xnu/src/mk_qmuxlog2.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 0517679..f092aa7 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5036,7 +5036,7 @@ static void
+ qmux_log(const char *dir, unsigned chan, uint8_t svc, uint8_t cid, const uint8_t *sdu, uint32_t len)
+ {
+ 	static bool parsed;
+-	char hex[3 * 40 + 1];
++	char hex[3 * 80 + 1];
+ 	uint32_t hdr = svc == 0 ? 6 : 7, n = 0;
+ 	uint16_t msg = 0;
+ 
+@@ -5049,7 +5049,7 @@ qmux_log(const char *dir, unsigned chan, uint8_t svc, uint8_t cid, const uint8_t
+ 	}
+ 	memcpy(&msg, sdu + (svc == 0 ? 2 : 3), 2);
+ 	hex[0] = 0;
+-	for (uint32_t i = hdr; i < len && n < 40; i++, n++) {
++	for (uint32_t i = hdr; i < len && n < 80; i++, n++) {
+ 		snprintf(hex + 3 * n, 4, "%02x ", sdu[i]);
+ 	}
+ 	LOG("qmux%u %s svc %#x %s client %u msg %#x%s, %u bytes: %s", chan + 1, dir, svc, svc_name(svc), cid, msg,
