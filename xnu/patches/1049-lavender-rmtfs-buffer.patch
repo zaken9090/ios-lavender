@@ -1,0 +1,37 @@
+lavender: rmtfs buffer is the fixed region 0x85e00000+2 MB shared HLOS+MSA (generator: xnu/src/mk_rmtfsbuf.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 39543a7..aa1225b 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -1776,7 +1776,8 @@ tftp_session(uint32_t dst_port, const uint8_t *d, uint32_t len)
+ }
+ 
+ /* rmtfs */
+-#define RMTFS_BUF_SIZE      0x300000            /* qcom,rmtfs_sharedmem size */
++#define RMTFS_BUF_SIZE      0x200000            /* lavender: qcom,rmtfs_sharedmem@85e00000 */
++#define RMTFS_BUF_PA        0x85E00000ull
+ #define VMID_HLOS           3
+ #define VMID_MSS_MSA        15
+ #define VMID_NAV            0x2B
+@@ -1897,12 +1898,17 @@ rmtfs_rx(uint32_t node, uint32_t port, uint16_t txn, uint16_t msg, const uint8_t
+ 	}
+ 	case 4: {                                   /* ALLOC_BUFF */
+ 		if (rmtfs_pa == 0) {
+-			rmtfs_va = (uint8_t *)pool_alloc(RMTFS_BUF_SIZE, &rmtfs_pa);   /* the modem owns it from now on */
++			IOMemoryMap *rm = map_phys(RMTFS_BUF_PA, RMTFS_BUF_SIZE, true);    /* kept for the session */
++			rmtfs_va = rm != NULL ? (uint8_t *)rm->getVirtualAddress() : NULL;
+ 			if (rmtfs_va == NULL) {
+ 				rmtfs_pa = 0;
+ 			} else {
+-				static const uint32_t v[] = { VMID_HLOS, VMID_MSS_MSA, VMID_NAV };
+-				(void)scm_assign(rmtfs_pa, RMTFS_BUF_SIZE, v, 3);
++				static const uint32_t v[] = { VMID_HLOS, VMID_MSS_MSA };
++				rmtfs_pa = RMTFS_BUF_PA;
++				bzero(rmtfs_va, RMTFS_BUF_SIZE);
++				mb();
++				LOG("rmtfs: %llx+%x shared with the modem: %d", rmtfs_pa, RMTFS_BUF_SIZE,
++				    (int)scm_assign(rmtfs_pa, RMTFS_BUF_SIZE, v, 2));
+ 			}
+ 		}
+ 		LOG("t=%u ms: rmtfs: alloc for caller %u -> %llx", g_ms, caller, rmtfs_pa);
