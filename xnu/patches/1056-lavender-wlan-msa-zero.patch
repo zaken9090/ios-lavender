@@ -1,0 +1,41 @@
+lavender: WLAN MSA region zeroed before it is assigned to the modem; pin_connect_result_enable (generator: xnu/src/mk_wlanmsa0.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index f0d3866..dbdb40c 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2199,6 +2199,26 @@ w_on_msa_info(const uint8_t *d, uint32_t len)
+ 
+ 	LOG("wlfw: %u MSA region(s)", n);
+ 	IOSleep(20);                                /* ath10k: give the modem time before the XPU update */
++	static bool msa_cleared;
++	uint32_t clear = 1;
++	(void)PE_parse_boot_argn("modem_msa0", &clear, sizeof(clear));
++	if (!msa_cleared && clear != 0) {
++		/* lavender: no stale firmware state from the system that ran before this fastboot boot */
++		IOMemoryMap *mm = map_phys(WLFW_MSA_BASE, WLFW_MSA_SIZE, true);
++		if (mm != NULL) {
++			volatile uint32_t *w = (volatile uint32_t *)mm->getVirtualAddress();
++			uint32_t nz = 0;
++			for (uint32_t i = 0; i < WLFW_MSA_SIZE / 4; i++) {
++				nz += w[i] != 0;
++			}
++			LOG("wlfw: MSA %x+%x had %u non-zero words (first %08x %08x %08x %08x), zeroed", WLFW_MSA_BASE, WLFW_MSA_SIZE, nz,
++			    w[0], w[1], w[2], w[3]);
++			bzero((void *)mm->getVirtualAddress(), WLFW_MSA_SIZE);
++			mb();
++			mm->release();
++			msa_cleared = true;
++		}
++	}
+ 	for (uint32_t i = 0; i < n && 1 + 13 * (i + 1) <= l; i++) {
+ 		const uint8_t *e = v + 1 + 13 * i;      /* u64 addr, u32 size, u8 secure */
+ 		uint64_t addr;
+@@ -2308,6 +2328,7 @@ wlfw_arrive(uint32_t node, uint32_t port)
+ 	if (wm_new(&m, WLFW_IND_REGISTER)) {
+ 		wm_u8(&m, 0x10, 1);                     /* fw_ready_enable */
+ 		wm_u8(&m, 0x13, 1);                     /* msa_ready_enable */
++		wm_u8(&m, 0x14, 1);                     /* pin_connect_result_enable (icnss) */
+ 		wm_u32(&m, 0x15, WLFW_CLIENT_ID);       /* client_id */
+ 		wm_send(&m);
+ 		w_step = "ind_register sent";
