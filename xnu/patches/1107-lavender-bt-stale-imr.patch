@@ -1,0 +1,24 @@
+lavender: Bluetooth UART - RXSTALE enabled in IMR (generator: xnu/src/mk_bt23.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 396da6b..e1a2625 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -115,7 +115,7 @@ bt_uart_baud(uint32_t code)
+ 	wr(uart, U_MR1, 0);                                      /* no hardware flow control */
+ 	wr(uart, U_MR2, (3u << 4) | (1u << 2));                  /* 8 bits, 1 stop, no parity */
+ 	wr(uart, U_CR, CR_TX_EN | CR_RX_EN);
+-	wr(uart, U_IMR, 0);
++	wr(uart, U_IMR, 1u << 3);                                /* RXSTALE latched (no IRQ routed) */
+ 	wr(uart, U_CR, CR_RESET_STALE);
+ 	wr(uart, U_DMRX, 0xFFFFFF);
+ 	wr(uart, U_CR, CR_STALE_EN);
+@@ -159,7 +159,7 @@ rx_push(uint8_t c)
+ static void
+ bt_rx_poll(void)
+ {
+-	if (rd(uart, U_ISR) & MISR_RXSTALE) {
++	if ((rd(uart, U_ISR) | rd(uart, 0x10 /* MISR */)) & MISR_RXSTALE) {
+ 		uint32_t snap = rd(uart, U_SNAP);
+ 		int32_t left = (int32_t)(snap - rx_taken);
+ 		while (left > 0 && (rd(uart, U_SR) & SR_RX_READY)) {
