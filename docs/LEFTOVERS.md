@@ -191,3 +191,25 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 5. **Inactive GPU/display tries**: 1029 arena (296 lines), 1028/1030/1034 vsync knobs, 1013
    `lavender_gpu_cp()` and lv_gpu stages 1-6/9: remove or fold into one diag file; keep 1026 for DVFS.
    Also track 1047 (`lv_serror=1`): find the SError source instead of recording it.
+
+## No-result log (kept up to date, newest last)
+
+Every patch that did not bring the result it was made for, with what became of it. Rule: once the
+real fix is found, such patches are taken out (or put behind a boot-arg) in a cleanup patch.
+
+| Patch | Area | Meant to | Result | Now |
+|---|---|---|---|---|
+| 1026, 1028, 1029, 1030, 1034 | GPU | 600 MHz / vsync / surface arena tries | no gain | off unless boot-arg; 1026 kept for DVFS |
+| 1056 | Wi-Fi | zero the MSA region before WLAN firmware | no change | active - to remove |
+| 1081, 1082 | Wi-Fi | MAC from persist file | file absent (MAC comes from NV 4678, 1083) | active - to remove |
+| 1089 | BT | 1 s raw dump after firmware | diagnostic only | removed in 1114 |
+| 1090 | BT | HCI_Reset retries (again / IBS 0xFD / no CTS) | not needed after NVM fix 1092 | removed in 1114 |
+| 1091 | BT | NVM layout log | diagnostic only | removed (1092) |
+| 1102 | BT | vendor answers + 8 zero bytes | broke 0xFCE9 | replaced by 1103/1115 |
+| 1106 | BT | FORCE_STALE after 5 ms idle, stuck-packet drop | no effect (drop kept as guard) | FORCE_STALE removed in 1114 |
+| 1107 | BT | IMR RXSTALE | no effect alone | kept (as Linux msm_serial) |
+| 1108 | BT | partial word read by count at stale | no effect alone | kept (part of the working path) |
+| 1109 | BT | 20 us polling after traffic | no effect, CPU cost | removed in 1114 |
+| 1110, 1111 | BT | stale / register logs | diagnostic only (found the cause) | removed in 1114 |
+| 1112 | BT | IPR RXSTALE_LAST | no effect alone; real fix was 1113 | kept (as Linux msm_serial; not proven needed) |
+| 1116 (SPMI part) | audio | read PM660L codec ids at SID 3 over the SPMI observer | hung the system | behind audio_spmi=1 (1117) |
