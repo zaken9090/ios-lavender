@@ -51,6 +51,7 @@ def main():
     ap.add_argument("tag")
     ap.add_argument("--log")
     ap.add_argument("--steps", default="")
+    ap.add_argument("--lock", action="store_true", help="save the lock screen first")
     a = ap.parse_args()
 
     path = usblog.device_path()
@@ -63,17 +64,27 @@ def main():
     rd.start()
     try:
         time.sleep(1.0)
-        # the display goes off ~10 s after a wake, and a picture takes seconds over USB: unlock first
-        wake(phone, rd)
-        bench.cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
-        shot = bench.screenshot(phone, rd, None)
+        # unlock the way bench.py does: wake, swipe at once, check for the home screen, up to 3 tries
+        # (--lock first saves the lock screen; the display goes off ~10 s after a wake)
+        if a.lock:
+            wake(phone, rd)
+            shot = bench.screenshot(phone, rd, None)
+            if shot:
+                save(shot, f"ui_{a.tag}_1_lock")
+        home = False
+        shot = None
+        for _ in range(3):
+            wake(phone, rd)
+            m = rd.mark()
+            bench.cmd(phone, "lv:swipe 540 2200 540 900 250", 4.5)
+            shot = bench.screenshot(phone, rd, None)
+            if shot and b"SWEET FPS" in rd.since(m) and bench.is_home(shot):
+                home = True
+                break
         if shot:
             save(shot, f"ui_{a.tag}_2_unlocked")
-        bench.cmd(phone, "lv:power", 2.0)               # lock, then wake for the lock screen
-        wake(phone, rd)
-        shot = bench.screenshot(phone, rd, None)
-        if shot:
-            save(shot, f"ui_{a.tag}_1_lock")
+        if not home:
+            print("uishot: NOT UNLOCKED", file=sys.stderr)
         n = 3
         for step in [s.strip() for s in a.steps.split(";") if s.strip()]:
             if step.startswith("wait"):
