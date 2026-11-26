@@ -1,14 +1,15 @@
 lavender: audio A4b-1 - LPASS SMMU read, MI2S clock seen on the pins (generator: xnu/src/mk_audio7.py)
 
 diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
-index 6a8a7ff..cfc82de 100644
+index 6a8a7ff..45d8c1a 100644
 --- a/iokit/Kernel/arm/TopazAudio.cpp
 +++ b/iokit/Kernel/arm/TopazAudio.cpp
-@@ -1340,6 +1340,72 @@ amp_status(const char *when)
+@@ -1340,6 +1340,73 @@ amp_status(const char *when)
  	    lv_amp_read(0x0002), lv_amp_read(0x0003), lv_amp_read(0x0004), lv_amp_read(0x0005), lv_amp_read(0x0006));
  }
  
 +/* ---- A4b-1 (mk_audio7.py): LPASS SMMU, read only, single 32-bit ldr */
++extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 +static volatile uint8_t *lp_smmu;
 +static uint32_t
 +lpr(uint32_t off)
@@ -77,7 +78,7 @@ index 6a8a7ff..cfc82de 100644
  /* A4a: amplifier set up, MI2S clocks through the AFE port, read the amplifier while they run, stop */
  static void
  a4a_test(void)
-@@ -1351,6 +1417,7 @@ a4a_test(void)
+@@ -1351,6 +1418,7 @@ a4a_test(void)
  		if (afe_i2s_config() && afe_port(true)) {
  			IOSleep(50);
  			amp_status("with clocks");
@@ -85,7 +86,7 @@ index 6a8a7ff..cfc82de 100644
  			IOSleep(2000);
  			amp_status("after 2 s");
  			afe_port(false);
-@@ -1359,6 +1426,7 @@ a4a_test(void)
+@@ -1359,6 +1427,7 @@ a4a_test(void)
  	}
  	lv_mi2s_pins(false);
  	LOG("A4a done (amp %s)", amp ? "set up" : "NOT set up");

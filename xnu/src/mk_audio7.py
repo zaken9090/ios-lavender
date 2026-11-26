@@ -31,6 +31,7 @@ def sub(old, new):
 
 
 sub('''/* A4a: amplifier set up, MI2S clocks through the AFE port, read the amplifier while they run, stop */''', r'''/* ---- A4b-1 (mk_audio7.py): LPASS SMMU, read only, single 32-bit ldr */
+extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 static volatile uint8_t *lp_smmu;
 static uint32_t
 lpr(uint32_t off)
