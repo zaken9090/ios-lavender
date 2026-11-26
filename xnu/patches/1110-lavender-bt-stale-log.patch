@@ -1,0 +1,46 @@
+lavender: Bluetooth UART - stale event log (generator: xnu/src/mk_bt26.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index b382373..c6f775c 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -146,7 +146,8 @@ bt_put(const uint8_t *p, uint32_t n)
+ #define U_SNAP              0x38
+ #define MISR_RXSTALE        (1u << 3)
+ static uint8_t rx_ring[8192];
+-static uint32_t rx_head, rx_tail, rx_taken;     /* rx_taken: bytes of the current transfer already read */
++static uint32_t rx_head, rx_tail, rx_taken;
++static uint32_t stale_log, stale_n;             /* mk_bt26.py: set when the control is up */     /* rx_taken: bytes of the current transfer already read */
+ 
+ static void
+ rx_push(uint8_t c)
+@@ -162,12 +163,21 @@ bt_rx_poll(void)
+ 	if ((rd(uart, U_ISR) | rd(uart, 0x10 /* MISR */)) & MISR_RXSTALE) {
+ 		uint32_t snap = rd(uart, U_SNAP);
+ 		int32_t left = (int32_t)(snap - rx_taken);
++		uint32_t sr0 = rd(uart, U_SR), fs0 = rd(uart, U_RXFS), words = 0, lastw = 0;
++		int32_t left0 = left;
+ 		while (left > 0) {                      /* by count: a partial word has no RX_READY */
+ 			uint32_t w = rd(uart, U_RF);
++			words++;
++			lastw = w;
+ 			for (int i = 0; i < 4 && left > 0; i++, left--) {
+ 				rx_push((uint8_t)(w >> (8 * i)));
+ 			}
+ 		}
++		if (stale_log != 0 && stale_n < 60) {
++			stale_n++;
++			LOG("stale %u: snap %u taken %u left %d words %u last %08x sr %#x->%#x rxfs %#x->%#x", stale_n, snap, rx_taken,
++			    left0, words, lastw, sr0, rd(uart, U_SR), fs0, rd(uart, U_RXFS));
++		}
+ 		rx_taken = 0;
+ 		wr(uart, U_CR, CR_RESET_STALE);
+ 		wr(uart, U_DMRX, 0xFFFFFF);
+@@ -824,6 +834,7 @@ bt_serve(void)
+ 		return;
+ 	}
+ 	bt_ready = true;
++	stale_log = 1;
+ 	static uint8_t pkt[4 + 65536];
+ 	uint32_t have = 0, idle_ms = 0, idle_us = 20000, overruns = 0;
+ 	for (;;) {
