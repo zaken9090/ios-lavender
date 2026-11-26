@@ -1,0 +1,68 @@
+lavender: CPU load and GPU sensor in the temperature log (generator: xnu/src/mk_thermal2.py)
+
+diff --git a/iokit/Kernel/arm/LavenderThermal.cpp b/iokit/Kernel/arm/LavenderThermal.cpp
+index 725babd..1aa554b 100644
+--- a/iokit/Kernel/arm/LavenderThermal.cpp
++++ b/iokit/Kernel/arm/LavenderThermal.cpp
+@@ -13,6 +13,42 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ extern "C" void lv_thermal_start(void);
+ 
+ static volatile uint32_t *tm;
++
++/* osfmk: per-processor tick counters (struct processor_cpu_load_info: user, system, idle, nice) */
++extern "C" void *cpu_to_processor(int cpu);
++extern "C" int processor_info(void *processor, int flavor, void **host, int *info, unsigned int *count);
++extern "C" unsigned int real_ncpus;
++#define LV_MAX_CPUS         8
++static uint32_t last_busy[LV_MAX_CPUS], last_all[LV_MAX_CPUS];
++
++/* busy share in percent since the last call: all cores, and the busiest one */
++static void
++cpu_load(unsigned *all_pct, unsigned *top_pct, int *top_cpu)
++{
++	uint64_t busy = 0, total = 0;
++	*top_pct = 0;
++	*top_cpu = -1;
++	for (unsigned c = 0; c < real_ncpus && c < LV_MAX_CPUS; c++) {
++		void *p = cpu_to_processor((int)c);
++		int t[4] = { 0, 0, 0, 0 };
++		unsigned int n = 4;
++		void *host = NULL;
++		if (p == NULL || processor_info(p, 2 /* PROCESSOR_CPU_LOAD_INFO */, &host, t, &n) != 0) {
++			continue;
++		}
++		uint32_t b = (uint32_t)t[0] + (uint32_t)t[1] + (uint32_t)t[3], a = b + (uint32_t)t[2];
++		uint32_t db = b - last_busy[c], da = a - last_all[c];
++		last_busy[c] = b;
++		last_all[c] = a;
++		busy += db;
++		total += da;
++		if (da != 0 && db * 100 / da >= *top_pct) {
++			*top_pct = db * 100 / da;
++			*top_cpu = (int)c;
++		}
++	}
++	*all_pct = total != 0 ? (unsigned)(busy * 100 / total) : 0;
++}
+ static uint32_t period_s = 30;
+ 
+ static void
+@@ -37,10 +73,16 @@ thermal_thread(__unused void *arg, __unused wait_result_t w)
+ 			}
+ 			n += (unsigned)snprintf(line + n, sizeof(line) - n, "%d ", t / 10);
+ 		}
++		unsigned all = 0, top = 0;
++		int topc = -1;
++		cpu_load(&all, &top, &topc);
++		int g = (int)(tm[(0xA0 + 4 * 8) / 4] & 0xfff);
++		g = (g & 0x800) ? g - 0x1000 : g;
+ 		if (valid == 0) {
+-			LOG("no valid sensor (status of sensor 0: %#x)", tm[0xA0 / 4]);
++			LOG("no valid sensor (status of sensor 0: %#x), load %u%% (busiest cpu %d %u%%)", tm[0xA0 / 4], all, topc, top);
+ 		} else {
+-			LOG("max %d.%d C (sensor %d)%s, all: %s", max / 10, (max < 0 ? -max : max) % 10, at, max >= 800 ? " HOT" : "", line);
++			LOG("gpu %d.%d C, hottest %d.%d C (sensor %d)%s, load %u%% (busiest cpu %d %u%%), all: %s", g / 10, (g < 0 ? -g : g) % 10,
++			    max / 10, (max < 0 ? -max : max) % 10, at, max >= 800 ? " HOT" : "", all, topc, top, line);
+ 		}
+ 		IOSleep(period_s * 1000);
+ 	}
