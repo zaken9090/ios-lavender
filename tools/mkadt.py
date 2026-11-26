@@ -44,7 +44,7 @@ def cstr(*strings):
     return b"".join(s.encode() + b"\0" for s in strings)
 
 
-def build(product_path=None, seed=None, baseband_path=None):
+def build(product_path=None, seed=None, baseband_path=None, wlan_path=None):
     counter = iter(range(1, 1000))
 
     def node(name, props=(), children=()):
@@ -140,6 +140,20 @@ def build(product_path=None, seed=None, baseband_path=None):
         props = [(k, cstr("sRGB") if k == "artwork-display-gamut" else v)
                  for k, flag, v in src.props if not flag and k not in ("name", "AAPL,phandle")]
         extra.append(node("product", props))
+    if wlan_path:
+        # arm-io/wlan as on the iPhone X: launchd starts wifid only when the device tree has a node
+        # named "wlan" (or "marconi-wifi"). Its wlan.* / bcom.* tunables are kept; not copied: the
+        # iPhone's MAC address, its GPIO/PMU functions, interrupts, phandles, syscfg pointers.
+        real, _ = adt.parse(open(wlan_path, "rb").read())
+        src = None
+        for c in real.child("arm-io").children:
+            for g in c.children:
+                if g.name == "wlan" and g.prop("compatible") and b"uart" in g.prop("compatible"):
+                    src = g
+        drop = ("name", "AAPL,phandle", "local-mac-address", "interrupts", "interrupt-parent", "audio-protection-driver",
+                "wifi-antenna-sku-info", "wifi-calibration-msf")
+        props = [(k, v) for k, flag, v in src.props if not flag and k not in drop and not k.startswith("function-")]
+        arm_io.children.append(node("wlan", props))
     if baseband_path:
         # /baseband as on the Qualcomm iPhone X: launchd then loads the cellular CommCenter job and
         # libTelephonyBaseband finds its "config" timings. No function-* (they point at Apple GPIO/PMU
@@ -166,8 +180,9 @@ if __name__ == "__main__":
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--product")
     ap.add_argument("--baseband", help="real iPhone X device tree to copy /baseband from")
+    ap.add_argument("--wlan", help="real iPhone X device tree to copy arm-io/.../wlan from")
     a = ap.parse_args()
-    blob = adt.serialize(build(a.product, baseband_path=a.baseband))
+    blob = adt.serialize(build(a.product, baseband_path=a.baseband, wlan_path=a.wlan))
     open(a.out, "wb").write(blob)
     if a.dump:
         adt.dump(adt.parse(blob)[0])
