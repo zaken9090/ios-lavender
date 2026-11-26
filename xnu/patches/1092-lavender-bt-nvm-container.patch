@@ -1,0 +1,86 @@
+lavender: Bluetooth - NVM edits inside the BT+FM container (generator: xnu/src/mk_bt8.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 12e38cb..4a2b287 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -366,6 +366,29 @@ done:
+ 	return out;
+ }
+ 
++/* the tag edits of btqca qca_tlv_check_data on a BT NVM body (tags: id u16, len u16, 8 reserved, data) */
++static void
++bt_nvm_edit(uint8_t *body, uint32_t len)
++{
++	for (uint32_t idx = 0; idx + 12 <= len;) {
++		uint8_t *t = body + idx;
++		uint16_t id = (uint16_t)(t[0] | (t[1] << 8)), tl = (uint16_t)(t[2] | (t[3] << 8));
++		if (idx + 12u + tl > len) {
++			break;
++		}
++		if ((id == 17 || id == 27) && tl >= 3) {
++			LOG("nvm tag %u len %u: %02x %02x %02x", id, tl, t[12], t[13], t[14]);
++		}
++		if (id == 17 && tl >= 3) {
++			t[12] &= (uint8_t)~0x80u;      /* no software in-band sleep */
++			t[14] = 0;                      /* 115200 */
++		} else if (id == 27 && tl >= 1) {
++			t[12] &= (uint8_t)~1u;          /* no deep sleep */
++		}
++		idx += 12u + tl;
++	}
++}
++
+ /* one TLV file as 243-byte segments (btqca qca_download_firmware) */
+ static bool
+ bt_download(const char *what, uint8_t *data, uint32_t size, bool patch)
+@@ -377,30 +400,27 @@ bt_download(const char *what, uint8_t *data, uint32_t size, bool patch)
+ 	if (patch && size >= 4 + 10) {
+ 		mode = data[4 + 10];                    /* tlv_type_patch.download_mode */
+ 	}
+-	if (!patch) {
++	if (!patch && size >= 4) {
+ 		uint32_t len = (data[1] | (data[2] << 8) | ((uint32_t)data[3] << 16));
+-		for (uint32_t o = 0; o < 32 && o + 8 <= size; o += 8) {
+-			LOG("nvm +%u: %02x %02x %02x %02x %02x %02x %02x %02x", o, data[o], data[o + 1], data[o + 2], data[o + 3], data[o + 4],
+-			    data[o + 5], data[o + 6], data[o + 7]);
+-		}
+-		LOG("nvm: type %u length %u (file %u)", data[0], len, size);
+-		unsigned ntag = 0;
+-		for (uint32_t idx = 0; idx + 12 <= len && 4 + idx + 12 <= size;) {
+-			uint8_t *t = data + 4 + idx;
+-			uint16_t id = (uint16_t)(t[0] | (t[1] << 8)), tl = (uint16_t)(t[2] | (t[3] << 8));
+-			if (ntag++ < 40) {
+-				LOG("nvm tag at %u: id %u len %u", idx, id, tl);
+-			}
+-			if ((id == 17 || id == 27) && tl >= 4) {
+-				LOG("nvm tag %u len %u: %02x %02x %02x %02x", id, tl, t[12], t[13], t[14], t[15]);
+-			}
+-			if (id == 17 && tl >= 3) {
+-				t[12] |= 0x80;
+-				t[14] = 0;              /* 115200 */
+-			} else if (id == 27 && tl >= 1) {
+-				t[12] &= (uint8_t)~1u;  /* no in-band sleep */
++		if (len > size - 4) {
++			len = size - 4;
++		}
++		if (data[0] == 2) {
++			bt_nvm_edit(data + 4, len);
++		} else if (data[0] == 4) {
++			for (uint32_t o = 4; o + 4 <= 4 + len;) {
++				uint32_t sl = data[o + 1] | (data[o + 2] << 8) | ((uint32_t)data[o + 3] << 16);
++				if (sl > 4 + len - (o + 4)) {
++					break;
++				}
++				LOG("nvm: part type %u, %u bytes", data[o], sl);
++				if (data[o] == 2) {
++					bt_nvm_edit(data + o + 4, sl);
++				}
++				o += 4 + sl;
+ 			}
+-			idx += 12u + tl;
++		} else {
++			LOG("nvm: unknown type %u", data[0]);
+ 		}
+ 	}
+ 	LOG("firmware: %s, %u bytes, download mode %u", what, size, mode);
