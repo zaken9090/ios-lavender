@@ -1,0 +1,51 @@
+lavender: modem_mode=N sets the modem operating mode through DMS once at modem start (generator: xnu/src/mk_modemmode.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index f70434f..d442dfa 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -797,6 +797,9 @@ svc_name(uint32_t svc)
+ 
+ static unsigned q_odd;
+ 
++#define PORT_DMSC           0x4005              /* our QMI client port towards DMS (mk_modemmode.py) */
++static bool dms_mode_sent;
++
+ static void
+ qrtr_rx(const uint8_t *p, uint32_t len)
+ {
+@@ -836,6 +839,17 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+ 			q_srv[q_srv_count].port = c->d;
+ 			q_srv_count++;
+ 		}
++		if (c->a == 2 && !dms_mode_sent) {              /* DMS: the wanted operating mode, once (mk_modemmode.py) */
++			uint32_t mode = 0;
++			dms_mode_sent = true;
++			if (PE_parse_boot_argn("modem_mode", &mode, sizeof(mode))) {
++				uint8_t set[11] = { 0, 1, 0, 0x2e, 0, 4, 0, 1, 1, 0, (uint8_t)mode };
++				uint8_t get[7] = { 0, 2, 0, 0x2d, 0, 0, 0 };
++				LOG("dms mode: SET_OPERATING_MODE %u to %u:%x", mode, c->c, c->d);
++				qrtr_send(QRTR_TYPE_DATA, PORT_DMSC, c->c, c->d, set, sizeof(set));
++				qrtr_send(QRTR_TYPE_DATA, PORT_DMSC, c->c, c->d, get, sizeof(get));
++			}
++		}
+ 		if (c->a == QMI_SVC_WLFW) {
+ 			LOG("t=%u ms: *** WLFW service 0x45 up: inst %x node %u port %x ***", g_ms, c->b, c->c, c->d);
+ 			wlfw_arrive(c->c, c->d);
+@@ -5280,6 +5294,16 @@ qmux_pump(void)
+ static bool
+ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
+ {
++	if (dst_port == PORT_DMSC) {
++		uint16_t msg = 0;
++		if (len >= 5) {
++			memcpy(&msg, data + 3, 2);
++		}
++		LOG("dms mode: answer to %#x, %u bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", msg, len, len > 7 ? data[7] : 0,
++		    len > 8 ? data[8] : 0, len > 9 ? data[9] : 0, len > 10 ? data[10] : 0, len > 11 ? data[11] : 0, len > 12 ? data[12] : 0,
++		    len > 13 ? data[13] : 0, len > 14 ? data[14] : 0, len > 15 ? data[15] : 0, len > 16 ? data[16] : 0, len > 17 ? data[17] : 0);
++		return true;
++	}
+ 	if (dst_port >= PORT_QMUX && dst_port < PORT_QMUX + QMUX_CLIENTS) {
+ 		unsigned i = dst_port - PORT_QMUX;
+ 		if (qmux_cl[i].used) {
