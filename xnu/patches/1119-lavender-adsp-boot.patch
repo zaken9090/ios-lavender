@@ -1,0 +1,56 @@
+lavender: audio A2/A3 - ADSP boot with lavender carveout and GLINK bit (generator: xnu/src/mk_audio3.py)
+
+diff --git a/iokit/Kernel/arm/LavenderAudio.cpp b/iokit/Kernel/arm/LavenderAudio.cpp
+index 5256521..d7bbf5a 100644
+--- a/iokit/Kernel/arm/LavenderAudio.cpp
++++ b/iokit/Kernel/arm/LavenderAudio.cpp
+@@ -12,6 +12,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+ extern "C" bool topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
+ extern "C" int sweet_spmi_peek(unsigned sid, unsigned addr, uint8_t *out);
+ extern "C" void lv_audio_start(void);
++extern "C" void topaz_audio_init(void);         /* TopazAudio.cpp: ADSP boot, GLINK, QRTR (adsp=1) */
+ 
+ #define TLMM_CENTER_PA      0x03500000ull
+ #define TLMM_NORTH_PA       0x03900000ull
+@@ -228,6 +229,7 @@ audio_thread(__unused void *arg, __unused wait_result_t w)
+ 	census_i2c(1);
+ 	census_i2c(0);
+ 	LOG("A1 done");
++	topaz_audio_init();                             /* A2/A3 with boot-arg adsp=1 */
+ 	thread_terminate(current_thread());
+ }
+ 
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 3d915cd..1ecf887 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -415,7 +415,7 @@ AppleCLCD::start(IOService *provider)
+ 		return false;
+ 	}
+ 	topaz_modem_init();
+-	topaz_audio_init();
++	/* lavender: the ADSP is started by the audio thread once the modem is up (mk_audio3.py) */
+ 	sweet_amfi_service_init();
+ 	sweet_busy_init();
+ 	PE_current_console(&video);
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 6bfe1a2..90c80d1 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -36,13 +36,13 @@ extern "C" bool     topaz_part_fw_read(const char *path, uint64_t off, void *dst
+ 
+ #define ADSP_PID            2                   /* SMEM host / SMP2P / GLINK remote pid */
+ #define ADSP_PAS_ID         1
+-#define ADSP_CARVE_PA       0x53800000u         /* DT pil_adsp_region */
+-#define ADSP_CARVE_SIZE     0x02300000u
++#define ADSP_CARVE_PA       0x92A00000u         /* lavender DT adsp_fw_region (mk_audio3.py) */
++#define ADSP_CARVE_SIZE     0x01E00000u
+ #define ITEM_SMP2P_OUT      429                 /* apps -> adsp (DT qcom,smem = <443 429>: in, out) */
+ #define ITEM_SMP2P_IN       443                 /* adsp -> apps */
+ #define ITEM_ADSP_CRASH     423
+ #define ADSP_SMP2P_BIT      10
+-#define ADSP_GLINK_BIT      8
++#define ADSP_GLINK_BIT      9                   /* lavender: APCS bit 9 (glink lpass irq-mask 0x200) */
+ #define SMEM_GLOBAL_HOST    0xFFFE
+ 
+ #define SCM_FN(svc, cmd)    (0x42000000u | ((uint32_t)(svc) << 8) | (uint32_t)(cmd))
