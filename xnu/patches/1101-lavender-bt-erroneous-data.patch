@@ -1,0 +1,31 @@
+lavender: Bluetooth control - Erroneous Data Reporting commands for bluetoothd (generator: xnu/src/mk_bt17.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index c2ce19d..06b0913 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -686,6 +686,13 @@ tx_packet(const uint8_t *p, uint32_t n)
+ 	}
+ 	if (p[0] == 0x01 && n >= 4) {
+ 		uint16_t op = (uint16_t)(p[1] | (p[2] << 8));
++		if (op == 0x0C5A || op == 0x0C5B) {
++			/* Read / Write Default Erroneous Data Reporting: not in the Qualcomm firmware */
++			uint8_t cc[8] = { 0x04, 0x0e, (uint8_t)(op == 0x0C5A ? 5 : 4), 0x01, p[1], p[2], 0x00, 0x00 };
++			LOG("%#06x (%u bytes): answered here", op, p[3]);
++			ctl_up(cc, op == 0x0C5A ? 8 : 7);
++			return;
++		}
+ 		if (op >= 0xFC00) {
+ 			/* Broadcom vendor command (boot script, calibration): done by the kernel already */
+ 			uint8_t cc[7] = { 0x04, 0x0e, 0x04, 0x01, p[1], p[2], 0x00 };
+@@ -842,6 +849,10 @@ bt_serve(void)
+ 						LOG("rx: chip debug ACL %#x kept here (%u so far)", h, diag);
+ 					}
+ 				} else {
++					if (pkt[0] == 0x04 && pkt[1] == 0x0e && need >= 7 + 64 && pkt[4] == 0x02 && pkt[5] == 0x10 && pkt[6] == 0) {
++						LOG("supported commands: octet 18 %#04x -> with Erroneous Data Reporting", pkt[7 + 18]);
++						pkt[7 + 18] |= (1u << 2) | (1u << 3);
++					}
+ 					if (pkt[0] == 0x04 && pkt[1] == 0x0e && need >= 15 && pkt[4] == 0x01 && pkt[5] == 0x10 && pkt[6] == 0) {
+ 						LOG("Read_Local_Version: chip manufacturer %#x subversion %#x -> Broadcom 0xf / 0x420e",
+ 						    pkt[11] | (pkt[12] << 8), pkt[13] | (pkt[14] << 8));
