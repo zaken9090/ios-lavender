@@ -1,0 +1,62 @@
+lavender: Sahara DONE_RESP reports transfer complete after abp_images images (generator: xnu/src/mk_abp7.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index b290ff8..fd868ee 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -584,6 +584,7 @@ static uint32_t lv_sah_bad[2], lv_sah_good[2];         /* per session: candidate
+ static uint32_t lv_sah_served;                         /* candidate bits served in this session */
+ static int lv_sah_session = -1, lv_sah_pending = -1;   /* session of this attempt; candidate asked, no data yet */
+ static bool lv_sah_done;
++static uint32_t lv_sah_images, lv_abp_images = 1;      /* images pulled in this attempt; how many to pull (abp_images=) */
+ static thread_call_t lv_sah_timer;
+ static AppleBasebandPCIInterface *lv_sah_itf;
+ 
+@@ -593,6 +594,8 @@ lv_sah_attempt(void)
+ 	lv_sah_session = -1;
+ 	lv_sah_pending = -1;
+ 	lv_sah_done = false;
++	lv_sah_images = 0;
++	lv_sah_served = 0;
+ }
+ 
+ /* ask for the next image of this session; false when no candidate is left */
+@@ -637,7 +640,6 @@ lv_sah_open(AppleBasebandPCIInterface *itf)
+ 		lv_sah_timer = thread_call_allocate(lv_sah_tick, NULL);
+ 	}
+ 	lv_sah_session++;
+-	lv_sah_served = 0;
+ 	lv_sah_pending = -1;
+ 	lv_sah_done = false;
+ 	lv_sah_itf = itf;
+@@ -713,16 +715,18 @@ SweetABPUserClient::modemSide(const uint8_t *data, uint32_t len)
+ 		lv_sah_done = true;
+ 		lv_sah_pending = -1;
+ 		IOLog("LV ABP sahara: session %d: DONE after images %#x -> DONE_RESP\n", lv_sah_session, lv_sah_served);
+-		w[0] = 6; w[1] = 12; w[2] = 0;
++		lv_sah_images++;
++		w[0] = 6; w[1] = 12; w[2] = lv_sah_images >= lv_abp_images ? 1 : 0;    /* 1: transfer complete, 0: more pending */
+ 		fItf->rx(w, 12);
+ 		if (lv_abp_stage != LV_ABP_MISSION && lv_abp_hold == 0) {
+ 			lv_abp_set_stage(LV_ABP_MISSION);
+ 		}
+-		{
+-			/* what was sent is "running" now and speaks next: the HELLO of the following session */
++		if (w[2] != 0) {
++			IOLog("LV ABP sahara: %u image(s) pulled, transfer complete\n", lv_sah_images);
++		} else {
++			/* more to pull: the HELLO of the following session (one image per session) */
+ 			uint32_t hello[12] = { 1, 0x30, 2, 1, 0x400, 0, 0, 0, 0, 0, 0, 0 };
+ 			lv_sah_session++;
+-			lv_sah_served = 0;
+ 			lv_sah_done = false;
+ 			IOLog("LV ABP sahara: session %d begins on the open interface: HELLO\n", lv_sah_session);
+ 			fItf->rx(hello, sizeof(hello));
+@@ -942,6 +946,7 @@ IOWatchdog::start(IOService *provider)
+ 		(void)PE_parse_boot_argn("abp_hold", &lv_abp_hold, sizeof(lv_abp_hold));
+ 		(void)PE_parse_boot_argn("abp_fused", &lv_abp_fused, sizeof(lv_abp_fused));
+ 		(void)PE_parse_boot_argn("abp_imgcode", &lv_abp_imgcode, sizeof(lv_abp_imgcode));
++		(void)PE_parse_boot_argn("abp_images", &lv_abp_images, sizeof(lv_abp_images));
+ 		lv_abp_lock = IOLockAlloc();
+ 		lv_qmux_set_rx(lv_abp_qmux_rx);
+ 		lv_abp_provider = provider;
