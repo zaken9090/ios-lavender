@@ -1,0 +1,32 @@
+lavender: modem Q6 gets gcc_bimc_mss_q6_axi_clk; register dump when the boot ROM stays silent
+
+- TopazModem.cpp mss_mba_start()
+- made by xnu/src/mk_modembus.py
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 29e4783..23e5131 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5023,9 +5023,11 @@ mss_mba_start(void)
+ 	mss_clk("mss_cfg_ahb (iface)", 0x8a000, 1, 0x8a000);
+ 	LOG("Q6 before: RESET %#x PWR_CTL %#x; RMB pbl %#x mba %#x", mss_rd(mss_q6, 0x14), mss_rd(mss_q6, 0x30),
+ 	    mss_rd(mss_rmb, 0x04), mss_rd(mss_rmb, 0x0c));
+-	mss_clk("mss_q6_bimc_axi (bus)", 0x8a040, 1, 0x8a040);
++	mss_clk("mss_q6_bimc_axi", 0x8a040, 1, 0x8a040);
++	mss_clk("bimc_mss_q6_axi (bus)", 0x4401c, 1, 0x4401c);
+ 	mss_clk("boot_rom_ahb (mem)", 0x52004, 1u << 10, 0x38004);
+ 	mss_wr(mss_gcc, 0x5200c, mss_rd(mss_gcc, 0x5200c) | (1u << 2));        /* gpll0 to the MSS (downstream gpll0_out_msscc) */
++	LOG("gpll0 to the MSS: vote %#x", mss_rd(mss_gcc, 0x5200c));
+ 	mss_clk("mss_snoc_axi", 0x8a03c, 1, 0x8a03c);
+ 	mss_clk("mss_mnoc_bimc_axi", 0x8a004, 1, 0x8a004);
+ 	for (unsigned i = 0; i < 3; i++) {
+@@ -5082,6 +5084,9 @@ mss_mba_start(void)
+ 	LOG("Q6 started: xo %#x bhs %u PWR_CTL %#x RESET %#x; PBL status %d (1 = success)", mss_rd(mss_q6, 0x38), bhs,
+ 	    mss_rd(mss_q6, 0x30), mss_rd(mss_q6, 0x14), pbl);
+ 	if (pbl != 1) {
++		LOG("no boot ROM status: Q6 GFMUX %#x MEM_PWR %#x BHS %#x STRAP %#x; RMB image %#x pbl %#x cmd %#x mba %#x; halt q6 %#x/%#x/%#x",
++		    mss_rd(mss_q6, 0x20), mss_rd(mss_q6, 0x34), mss_rd(mss_q6, 0xc4), mss_rd(mss_q6, 0x110), mss_rd(mss_rmb, 0x00),
++		    mss_rd(mss_rmb, 0x04), mss_rd(mss_rmb, 0x08), mss_rd(mss_rmb, 0x0c), mss_rd(mss_halt, 0), mss_rd(mss_halt, 4), mss_rd(mss_halt, 8));
+ 		return false;
+ 	}
+ 	int32_t mba = mss_wait(0x0c, 0, 5000);
