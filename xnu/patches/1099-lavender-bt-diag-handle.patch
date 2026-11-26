@@ -1,0 +1,15 @@
+lavender: Bluetooth control - debug-ACL filter on the raw handle (generator: xnu/src/mk_bt15.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 16a7b7d..941c612 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -831,7 +831,7 @@ bt_serve(void)
+ 				continue;
+ 			}
+ 			if (need != 0 && have >= need) {
+-				uint16_t h = (uint16_t)((pkt[1] | (pkt[2] << 8)) & 0x0fff);
++				uint16_t h = (uint16_t)(pkt[1] | (pkt[2] << 8));
+ 				if (pkt[0] == 0x02 && (h == 0x2edc || h == 0x2edd)) {
+ 					static uint32_t diag;
+ 					if (diag++ % 100 == 0) {
