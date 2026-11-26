@@ -115,3 +115,22 @@ SMEM 0x86000000 + 0x200000, hwlock tcsr-mutex 0x1f40000 lock 3. APCS 0x17911000.
   - message order: equals Android's icnss (ind_register, msa_info, assign, msa_ready, cap); host_cap left out or sent - no change; pin_connect_result_enable added (1056);
   - stale MSA contents: region zeroed before the assign (1056; it held 122525 non-zero words) - no change.
   Still unexplained: MSA_READY indication never arrives; two SErrors (esr 0xbf000002) at every modem start; TZ log ring printed no lines. Ideas not tried: 8-bit host_cap (ath10k "host-cap-8bit-quirk"), wlan_pd service-notifier state, reading the modem's crash/diag buffers through SMEM, vbatt/dynamic-feature messages after cap, comparing with a boot where Android ran just before (warm) versus a cold power-on.
+
+## Telephony (step 10): CommCenter on the real modem
+
+Survey, 2026-11-26 (root image 16.7.16, D22 = the Qualcomm "Mav" iPhone X; nothing of this existed in the earlier projects):
+
+- CommCenter itself only loads libraries; the baseband is run by the AppleBasebandManager code (libBasebandManager.dylib: BootController, QMITransportService, QMIXpcServer, RouterDelegate, RouterIPCController) and reached through `libPCITransport.dylib`.
+- libPCITransport probes the variant by which service exists: `AppleBasebandPCIControl` (Qualcomm, through `libIOABP.dylib`: classes IOABPControlClass, IOABPClass, IOABPTraceClass) or `AppleConvergedIPCBBControl` (Intel). Kernel services of the Qualcomm variant: `AppleBasebandPCIControl`, `AppleBasebandPCIInterface` (one per interface, property `ABPInterfaceProtocol`), `AppleBasebandPCITraceBackendRaw`, plus `AppleBaseband` (power/reset/properties, libTelephonyBasebandDynamic) and `AppleIPAppender` (PDP contexts, ApplePDPHelper) - the last two are today's empty stubs 1038/1036.
+- The interface methods are pipes: open, read/write (async), readRegister (BHI/BTI registers), sendImage, map memory, time sync; the control service has events and a "last known boot stage"; libTelephonyBaseband reads an "ABP boot stage" registry property.
+- QMI on Mav goes over Qualcomm's IPC router (`libmav_ipc_router_dynamic.dylib`, "MavRouter", RouterIPCController) - the protocol our modem already speaks to us as QRTR - and/or QMux pipes ("Mapping service %s to QMux %s"). Firmware in the image: `usr/standalone/update/Mav17.Release.bbfw`; the manager boots the modem through libBBUpdaterDynamic ("bootModem"), and has paths "Faking bootup", "Transport bypass enable", "skipping establishing transport", a `BootMode` key.
+
+Design (CommCenter and its libraries stay untouched; the kernel offers the same services Apple's kext does, with the phone's modem behind them):
+
+T1. The user-client ABI of libIOABP: selectors, arguments, async conventions, notifications (static analysis).
+T2. Kernel services AppleBasebandPCIControl / AppleBasebandPCIInterface that accept and log everything, to see what the manager does first (which interfaces, registers, boot stage).
+T3. Boot stage: present the modem as already running (it is: our kernel booted it), so the manager goes to its transport without pushing firmware. If it insists on its updater protocol, answer that protocol.
+T4. The router pipe: IPC-router packets between the manager and TopazModem's QRTR (our own host services keep their ports).
+T5. Services the Apple firmware has and this modem lacks (Apple-specific QMI services such as "bsp"): find which ones block, answer what is needed.
+T6. SIM, registration, signal bars; then calls (voice audio path), SMS, data (PDP contexts through AppleIPAppender to a network interface).
+Each step is checked from the USB log; a SIM card and a call need the user.
