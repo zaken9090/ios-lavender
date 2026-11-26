@@ -1,0 +1,84 @@
+lavender: modem_wlfw=N stops the WLFW handshake after step N; modem_wlhost=0 leaves host_cap out (generator: xnu/src/mk_wlfwsteps.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index db2d1f9..256ca09 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2212,6 +2212,17 @@ w_on_msa_info(const uint8_t *d, uint32_t len)
+ }
+ 
+ static unsigned w_arrivals, w_cap_tries, w_cap_retry_ms;
++static uint32_t w_stop = 9, w_hostcap = 1;      /* modem_wlfw=, modem_wlhost= */
++
++static bool
++w_stop_at(uint32_t step, const char *what)
++{
++	if (w_stop <= step) {
++		LOG("wlfw: stopped after %s (modem_wlfw=%u)", what, w_stop);
++		return true;
++	}
++	return false;
++}
+ 
+ extern "C" bool topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
+ 
+@@ -2247,8 +2258,10 @@ wlfw_arrive(uint32_t node, uint32_t port)
+ 	if ((w_node != 0 || w_port != 0) && w_node == node && w_port == port) {
+ 		return;
+ 	}
+-	uint32_t wl = 1;
++	uint32_t wl = 9;
+ 	(void)PE_parse_boot_argn("modem_wlfw", &wl, sizeof(wl));
++	w_stop = wl;
++	(void)PE_parse_boot_argn("modem_wlhost", &w_hostcap, sizeof(w_hostcap));
+ 	if (wl == 0) {
+ 		LOG("WLFW left alone (modem_wlfw=0)");
+ 		return;
+@@ -2316,6 +2329,19 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 			memcpy(&st, v, 8);
+ 		}
+ 		LOG("t=%u ms: wlfw: ind_register %s err %u, fw_status %llx", g_ms, ok ? "ok" : "FAILED", err, st);
++		if (w_stop_at(1, "ind_register")) {
++			break;
++		}
++		if (!w_hostcap) {
++			if (wm_new(&m, WLFW_MSA_INFO)) {
++				uint64_t a = WLFW_MSA_BASE;
++				wm_tlv(&m, 0x01, &a, 8);
++				wm_u32(&m, 0x02, WLFW_MSA_SIZE);
++				wm_send(&m);
++				w_step = "msa_info sent (no host_cap)";
++			}
++			break;
++		}
+ 		if (wm_new(&m, WLFW_HOST_CAP)) {
+ 			wm_u32(&m, 0x10, 0);                /* daemon_support = 0 */
+ 			wm_send(&m);
+@@ -2325,6 +2351,9 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 	}
+ 	case WLFW_HOST_CAP:
+ 		LOG("wlfw: host_cap %s err %u", ok ? "ok" : "rejected (not fatal)", err);
++		if (w_stop_at(2, "host_cap")) {
++			break;
++		}
+ 		if (wm_new(&m, WLFW_MSA_INFO)) {
+ 			uint64_t a = WLFW_MSA_BASE;
+ 			wm_tlv(&m, 0x01, &a, 8);            /* msa_addr */
+@@ -2337,11 +2366,17 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 		LOG("wlfw: msa_info %s err %u", ok ? "ok" : "FAILED", err);
+ 		if (ok) {
+ 			w_on_msa_info(d, len);
++			if (w_stop_at(3, "msa_info and the assign")) {
++				break;
++			}
+ 			w_simple(WLFW_MSA_READY, "msa_ready sent");
+ 		}
+ 		break;
+ 	case WLFW_MSA_READY:
+ 		LOG("wlfw: msa_ready %s err %u", ok ? "ok" : "FAILED", err);
++		if (w_stop_at(4, "msa_ready")) {
++			break;
++		}
+ 		w_simple(WLFW_CAP, "cap sent");
+ 		break;
+ 	case WLFW_CAP:
