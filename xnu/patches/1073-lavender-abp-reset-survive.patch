@@ -1,0 +1,121 @@
+lavender: baseband PCI pipes survive a baseband reset, 512-frame receive queue, bridge clients dropped at reset (generator: xnu/src/mk_abp9.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 64c4524..1ed2627 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -188,7 +188,8 @@ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
+  * lavender: Apple's baseband PCI services (xnu/src/mk_abp.py, mk_abp2.py; docs/ABP-ABI.md).
+  */
+ #define LV_ABP_NIF      21
+-#define LV_ABP_QMAX     16
++#define LV_ABP_QMAX     16              /* pending asynchronous reads */
++#define LV_ABP_RXQ      512             /* frames waiting for a read (mk_abp9.py) */
+ static const char *const lv_abp_names[LV_ABP_NIF] = {
+ 	"pbl", "sahara", "diag", "refs", "qmux1", "qmux2", "rom", "boot", "ari", "trace", "at", "dpl", "mediactl", "vcom",
+ 	"gnss", "qdss", NULL, "virtual_timesync", NULL, NULL, "boot_logger",
+@@ -225,7 +226,7 @@ public:
+ 	const char *fName;
+ 	unsigned fIndex;
+ 	/* receive side: data for the client, and its one pending asynchronous read */
+-	struct { uint8_t *data; uint32_t len; } fQ[LV_ABP_QMAX];
++	struct { uint8_t *data; uint32_t len; } fQ[LV_ABP_RXQ];
+ 	unsigned fQHead, fQCount, fRxLogged;
+ 	struct { OSAsyncReference64 ref; IOMemoryDescriptor *md; uint32_t max; } fRd[LV_ABP_QMAX];
+ 	unsigned fRdHead, fRdCount;
+@@ -241,6 +242,7 @@ OSDefineMetaClassAndStructors(AppleBasebandPCIInterface, IOService);
+ static IOLock *lv_abp_lock;
+ extern "C" bool lv_qmux_tx(unsigned chan, const uint8_t *frame, uint32_t len);                 /* TopazModem.cpp */
+ extern "C" void lv_qmux_set_rx(void (*fn)(unsigned chan, const uint8_t *frame, uint32_t len));
++extern "C" void lv_qmux_reset(void);
+ static IOReturn lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count);
+ static IOService *lv_abp_provider, *lv_abp_bb;
+ static AppleBasebandPCIControl *lv_abp_ctl;
+@@ -294,11 +296,11 @@ AppleBasebandPCIInterface::rx(const void *data, uint32_t len)
+ 		}
+ 		return;
+ 	}
+-	if (fQCount < LV_ABP_QMAX) {
++	if (fQCount < LV_ABP_RXQ) {
+ 		uint8_t *copy = (uint8_t *)IOMallocData(len != 0 ? len : 1);
+ 		if (copy != NULL) {
+ 			bcopy(data, copy, len);
+-			unsigned at = (fQHead + fQCount) % LV_ABP_QMAX;
++			unsigned at = (fQHead + fQCount) % LV_ABP_RXQ;
+ 			fQ[at].data = copy;
+ 			fQ[at].len = len;
+ 			fQCount++;
+@@ -390,7 +392,7 @@ lv_abp_set_stage(uint32_t stage)
+ 	IOLog("LV ABP: stage %s -> %s\n", names[lv_abp_stage & 3], names[stage & 3]);
+ 	lv_abp_stage = stage;
+ 	for (unsigned i = 0; i < LV_ABP_NIF; i++) {
+-		if (!(want & (1u << i))) {
++		if (false && !(want & (1u << i))) {     /* mk_abp9.py: the manager keeps its pipes through a reset */
+ 			lv_abp_unpublish(i);
+ 		}
+ 	}
+@@ -407,6 +409,9 @@ lv_abp_set_stage(uint32_t stage)
+ 		uint32_t hello[12] = { 1, 0x30, 2, 1, 0x400, 0, 0, 0, 0, 0, 0, 0 };
+ 		lv_abp_if[1]->rx(hello, sizeof(hello));
+ 	}
++	if (stage == LV_ABP_OFF) {
++		lv_qmux_reset();
++	}
+ 	if (stage == LV_ABP_MISSION && lv_abp_bb != NULL) {
+ 		IOReturn r = lv_abp_bb->messageClients(0xE3FF8001, NULL, 0);
+ 		IOLog("LV ABP: 'baseband alive' sent (%#x)\n", r);
+@@ -810,7 +815,7 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 				if (fItf->fQCount != 0) {
+ 					uint8_t *d = fItf->fQ[fItf->fQHead].data;
+ 					uint32_t n = fItf->fQ[fItf->fQHead].len;
+-					fItf->fQHead = (fItf->fQHead + 1) % LV_ABP_QMAX;
++					fItf->fQHead = (fItf->fQHead + 1) % LV_ABP_RXQ;
+ 					fItf->fQCount--;
+ 					IOLockUnlock(lv_abp_lock);
+ 					uint64_t take = n < in[1] ? n : in[1];
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index d442dfa..0517679 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5058,6 +5058,31 @@ qmux_log(const char *dir, unsigned chan, uint8_t svc, uint8_t cid, const uint8_t
+ static IOLock *qmux_lock;
+ static void (*qmux_rx_fn)(unsigned chan, const uint8_t *frame, uint32_t len);
+ 
++static volatile bool qmux_reset_wanted;
++
++/* the baseband was reset by its manager: forget the bridge's clients (done on the modem thread) */
++extern "C" void
++lv_qmux_reset(void)
++{
++	qmux_reset_wanted = true;
++}
++
++static void
++qmux_reset_now(void)
++{
++	unsigned n = 0;
++	qmux_reset_wanted = false;
++	for (unsigned i = 0; i < QMUX_CLIENTS; i++) {
++		if (qmux_cl[i].used) {
++			struct qrtr_ctrl c = { QRTR_TYPE_DEL_CLIENT, QRTR_NODE_APPS, PORT_QMUX + i, 0, 0 };
++			qrtr_send(QRTR_TYPE_DEL_CLIENT, QRTR_PORT_CTRL, q_modem_node, QRTR_PORT_CTRL, &c, sizeof(c));
++			qmux_cl[i].used = false;
++			n++;
++		}
++	}
++	LOG("qmux: baseband reset by its manager, %u clients dropped", n);
++}
++
+ extern "C" void
+ lv_qmux_set_rx(void (*fn)(unsigned chan, const uint8_t *frame, uint32_t len))
+ {
+@@ -5243,6 +5268,9 @@ qmux_ctl(unsigned chan, const uint8_t *sdu, uint32_t len)
+ static void
+ qmux_pump(void)
+ {
++	if (qmux_reset_wanted) {
++		qmux_reset_now();
++	}
+ 	for (int n = 0; n < 32; n++) {
+ 		uint8_t *f = NULL;
+ 		uint32_t len = 0;
