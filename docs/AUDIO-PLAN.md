@@ -112,3 +112,5 @@ path exists, so each kernel piece has been proven before iOS touches it.
 ## State
 
 - 2026-11-26: survey written. Next: A1.
+- 2026-11-26: A1 (xnu 1116-1117, run e132): PM660L L6 1.8 V on; on I2C6 (GPIO 22/23 bit-banged) only 0x3A ACKs, only with GPIO 77 high -> the amplifier is **MAX98927** (reset active low, no firmware); its revision register 0x01FF read 0x00 (expected 0x40, re-check with a longer reset delay). NFC 0x28 does not answer (not powered). The SPMI observer read of PM660L SID 3 0xF000 hung the system (1116) - codec ids now only with audio_spmi=1 (1117); read the codec through an owned channel later.
+- A2/A3 (xnu 1119): TopazAudio's PAS/SMP2P/GLINK/QRTR on lavender values (carveout 0x92A00000 + 0x1E00000, GLINK bit 9), started from the audio thread after A1 with adsp=1. In test.
