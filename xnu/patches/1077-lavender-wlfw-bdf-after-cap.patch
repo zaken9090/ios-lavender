@@ -1,0 +1,15 @@
+lavender: WLAN board data download right after cap, no MSA_READY indication needed (generator: xnu/src/mk_wlfwbdf.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 64c06ca..7fe83f7 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2144,7 +2144,7 @@ static void
+ w_start_bdf(void)
+ {
+ 	char name[40];
+-	if (w_bdf_started || !w_msa_ind || !w_cap_done) {
++	if (w_bdf_started || !w_cap_done) {             /* no MSA_READY indication from this firmware (mk_wlfwbdf.py) */
+ 		return;
+ 	}
+ 	w_bdf_started = true;
