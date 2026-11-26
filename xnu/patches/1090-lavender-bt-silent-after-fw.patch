@@ -1,0 +1,49 @@
+lavender: Bluetooth - CTS / IBS wake tries after the firmware (generator: xnu/src/mk_bt6.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 350ec82..3d492bf 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -382,6 +382,9 @@ bt_download(const char *what, uint8_t *data, uint32_t size, bool patch)
+ 		for (uint32_t idx = 0; idx + 12 <= len && 4 + idx + 12 <= size;) {
+ 			uint8_t *t = data + 4 + idx;
+ 			uint16_t id = (uint16_t)(t[0] | (t[1] << 8)), tl = (uint16_t)(t[2] | (t[3] << 8));
++			if ((id == 17 || id == 27) && tl >= 4) {
++				LOG("nvm tag %u len %u: %02x %02x %02x %02x", id, tl, t[12], t[13], t[14], t[15]);
++			}
+ 			if (id == 17 && tl >= 3) {
+ 				t[12] |= 0x80;
+ 				t[14] = 0;              /* 115200 */
+@@ -468,8 +471,30 @@ bt_setup(void)
+ 		}
+ 		LOG("after firmware: %u bytes; sr %#x isr %#x snap %u", total, rd(uart, U_SR), rd(uart, U_ISR), rd(uart, U_SNAP));
+ 	}
+-	if (bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen)) {
+-		LOG("HCI_Reset: status %#x", ret[0]);
++#define CTS_NOW() ((rd(uart, U_ISR) >> 6) & 1)
++	LOG("before HCI_Reset: cts %u mr1 %#x", CTS_NOW(), rd(uart, U_MR1));
++	bool up = bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen);
++	if (!up) {
++		LOG("try 1 (again): cts %u", CTS_NOW());
++		up = bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen);
++	}
++	if (!up) {
++		uint32_t mr1 = rd(uart, U_MR1);
++		wr(uart, U_MR1, mr1 & ~(1u << 6));
++		uint8_t wake = 0xFD;
++		bt_put(&wake, 1);
++		int a = bt_byte(50);
++		wr(uart, U_MR1, mr1);
++		LOG("try 2 (IBS wake 0xfd): got %#x, cts %u", a, CTS_NOW());
++		up = bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen);
++	}
++	if (!up) {
++		wr(uart, U_MR1, rd(uart, U_MR1) & ~(1u << 6));
++		LOG("try 3 (no CTS flow control): cts %u", CTS_NOW());
++		up = bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen);
++	}
++	if (up) {
++		LOG("HCI_Reset: status %#x, cts %u", ret[0], CTS_NOW());
+ 	}
+ 	if (bt_cmd_cc(0x1001, NULL, 0, ret, &rlen) && rlen >= 9) {
+ 		LOG("local version: status %#x hci %u rev %#x lmp %u manufacturer %#x subversion %#x", ret[0], ret[1],
