@@ -1,7 +1,7 @@
 lavender: lv_mgreset=1 renames the MobileGestalt cache (generator: xnu/src/mk_bt21.py)
 
 diff --git a/bsd/dev/topaz_fw.c b/bsd/dev/topaz_fw.c
-index fdf50b7..fe301b9 100644
+index fdf50b7..c6339be 100644
 --- a/bsd/dev/topaz_fw.c
 +++ b/bsd/dev/topaz_fw.c
 @@ -430,6 +430,16 @@ lavender_userland_install(void)
@@ -11,11 +11,11 @@ index fdf50b7..fe301b9 100644
 +	{
 +		/* lavender (xnu/src/mk_bt21.py): MobileGestalt's cache, rebuilt by iOS when missing */
 +		extern int sweet_rename(const char *from, const char *to);
-+		static const char mg[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
-+		    "Library/Caches/com.apple.MobileGestalt.plist";
++#define LV_MG "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/" 	"Library/Caches/com.apple.MobileGestalt.plist"
++		static const char mg[] = LV_MG;
 +		uint32_t mgreset = 0;
 +		if (PE_parse_boot_argn("lv_mgreset", &mgreset, sizeof(mgreset)) && mgreset != 0 && lv_exists(mg)) {
-+			printf("LVINSTALL MobileGestalt cache -> .lv-old: %d\n", sweet_rename(mg, mg ".lv-old"));
++			printf("LVINSTALL MobileGestalt cache -> .lv-old: %d\n", sweet_rename(mg, LV_MG ".lv-old"));
 +		}
 +	}
  	for (unsigned i = 0; i < sizeof(rootf) / sizeof(rootf[0]); i++) {

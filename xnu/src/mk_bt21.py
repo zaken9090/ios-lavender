@@ -45,11 +45,12 @@ patch(f'{tree}/bsd/dev/topaz_fw.c', '''	uint32_t restore = 0;
 	{
 		/* lavender (xnu/src/mk_bt21.py): MobileGestalt's cache, rebuilt by iOS when missing */
 		extern int sweet_rename(const char *from, const char *to);
-		static const char mg[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
-		    "Library/Caches/com.apple.MobileGestalt.plist";
+#define LV_MG "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/" \
+	"Library/Caches/com.apple.MobileGestalt.plist"
+		static const char mg[] = LV_MG;
 		uint32_t mgreset = 0;
 		if (PE_parse_boot_argn("lv_mgreset", &mgreset, sizeof(mgreset)) && mgreset != 0 && lv_exists(mg)) {
-			printf("LVINSTALL MobileGestalt cache -> .lv-old: %d\\n", sweet_rename(mg, mg ".lv-old"));
+			printf("LVINSTALL MobileGestalt cache -> .lv-old: %d\\n", sweet_rename(mg, LV_MG ".lv-old"));
 		}
 	}''')
 print('ok')
