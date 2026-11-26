@@ -1,0 +1,42 @@
+lavender: Bluetooth B2 diagnostics, NVM without in-band sleep (generator: xnu/src/mk_bt5.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 310e7d8..350ec82 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -253,8 +253,12 @@ bt_cmd_cc(uint16_t opcode, const uint8_t *param, uint8_t plen, uint8_t *ret, uin
+ 	bt_send(opcode, param, plen);
+ 	for (int n = 0; n < 8; n++) {
+ 		if (!bt_event(&code, buf, &l, 1000)) {
++			LOG("cmd %#06x: no event (after %d others); sr %#x isr %#x snap %u rxfs %#x", opcode, n, rd(uart, U_SR),
++			    rd(uart, U_ISR), rd(uart, U_SNAP), rd(uart, U_RXFS));
+ 			return false;
+ 		}
++		LOG("cmd %#06x: event %#04x len %u: %02x %02x %02x %02x %02x %02x", opcode, code, l, buf[0], buf[1], buf[2], buf[3],
++		    buf[4], buf[5]);
+ 		if (code == 0x0e && l >= 3 && (buf[1] | (buf[2] << 8)) == opcode) {
+ 			memcpy(ret, buf + 3, l - 3u);
+ 			*rlen = (uint8_t)(l - 3);
+@@ -449,7 +453,21 @@ bt_setup(void)
+ 		IOFreeData(f2, s2);
+ 	}
+ 	LOG("firmware: %s", ok ? "loaded" : "FAILED");
+-	IOSleep(100);
++	{
++		char line[3 * 32 + 1];
++		unsigned n = 0, total = 0;
++		for (int b; (b = bt_byte(1000)) >= 0 && total < 256; total++) {
++			snprintf(line + 3 * n, 4, "%02x ", b);
++			if (++n == 32) {
++				LOG("after firmware: %s", line);
++				n = 0;
++			}
++		}
++		if (n != 0) {
++			LOG("after firmware: %s", line);
++		}
++		LOG("after firmware: %u bytes; sr %#x isr %#x snap %u", total, rd(uart, U_SR), rd(uart, U_ISR), rd(uart, U_SNAP));
++	}
+ 	if (bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen)) {
+ 		LOG("HCI_Reset: status %#x", ret[0]);
+ 	}

@@ -18,7 +18,9 @@
 ## Plan
 
 - B1 (xnu 1085): power, UART, pulses, EDL version, HCI reset, local version - logged.
-- B2: Qualcomm firmware (rampatch, NVM) from the bluetooth partition, BD address from NV 447, baud 3 Mbit/s with flow control; the controller answers standard HCI.
+- B1 result (xnu 1087): with RTS/CTS on after the pulses the chip answers HCI (manufacturer 0x1D).
+- B2 (xnu 1088, in test): UARTDM stale/SNAP receive, FAT16 reader, rampatch + NVM (tag 17 baud 115200, tag 27 deep sleep off), address via 0xFC14; 3 Mbit/s later.
+- B2 goal: Qualcomm firmware (rampatch, NVM) from the bluetooth partition, BD address from NV 447, baud 3 Mbit/s with flow control; the controller answers standard HCI.
 - B3: kernel side for iOS: the "bluetooth" registry node (address, transport-encoding 3), /dev/btpoweroff, /dev/btwake, kernel control "com.apple.uart.bluetooth" (and the Skywalk one, or the BT_HCI_TRANSPORT route), all on top of the B2 driver.
 - B4: translation layer in the kernel control: Broadcom boot commands (FC18, FC2E, FC4C, FC4E, FC01, FC27, FD18/FD97/FD1E, ...) answered locally (FC01 -> Qualcomm address), Read_Local_Version rewritten (manufacturer 15, subversion 0x420E), Qualcomm vendor events and sleep bytes filtered; runtime Broadcom VSCs answered or refused.
 - B5: Settings shows Bluetooth on, scan finds devices; pairing needs the user.
