@@ -27,7 +27,8 @@ def sub(old, new):
 sub('''static volatile uint32_t *tm;''', '''static volatile uint32_t *tm;
 
 /* osfmk: per-processor tick counters (struct processor_cpu_load_info: user, system, idle, nice) */
-extern "C" processor_t cpu_to_processor(int cpu);     /* processor_info() comes from <mach/mach_interface.h> */
+extern "C" processor_t cpu_to_processor(int cpu);
+extern "C" int ml_get_max_cpu_number(void);     /* processor_info() comes from <mach/mach_interface.h> */
 #define LV_MAX_CPUS         8
 static uint32_t last_busy[LV_MAX_CPUS], last_all[LV_MAX_CPUS];
 
@@ -38,8 +39,8 @@ cpu_load(unsigned *all_pct, unsigned *top_pct, int *top_cpu)
 	uint64_t busy = 0, total = 0;
 	*top_pct = 0;
 	*top_cpu = -1;
-	for (unsigned c = 0; c < LV_MAX_CPUS; c++) {      /* offline cpus (cpus=4) have no processor */
-		processor_t p = cpu_to_processor((int)c);
+	for (int c = 0; c <= ml_get_max_cpu_number() && c < LV_MAX_CPUS; c++) {   /* cpus=4: only 0-3 exist (else the cpu_common.c:82 assertion) */
+		processor_t p = cpu_to_processor(c);
 		integer_t t[4] = { 0, 0, 0, 0 };
 		mach_msg_type_number_t n = 4;
 		host_t host = HOST_NULL;
@@ -54,7 +55,7 @@ cpu_load(unsigned *all_pct, unsigned *top_pct, int *top_cpu)
 		total += da;
 		if (da != 0 && db * 100 / da >= *top_pct) {
 			*top_pct = db * 100 / da;
-			*top_cpu = (int)c;
+			*top_cpu = c;
 		}
 	}
 	*all_pct = total != 0 ? (unsigned)(busy * 100 / total) : 0;
