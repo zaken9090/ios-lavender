@@ -92,3 +92,14 @@ Order:
 
 - 2026-11-26: step 1 written (xnu 1043).
 - 2026-11-26: step 1 verified on the phone (kernel CI 45731435398): 316 files, image/mba.mbn 238256 bytes, image/modem.mdt 8412, image/wlanmdsp.mbn 3859712. Next: steps 2 and 3.
+
+## Reference: SDM660 clocks and registers for the modem (Linux gcc-sdm660.c v6.6, sdm630.dtsi)
+
+GCC base 0x100000. Branch clocks (enable = bit 0 of the register, bit 31 = off):
+gcc_mss_cfg_ahb_clk 0x8a000 (iface), gcc_mss_mnoc_bimc_axi_clk 0x8a004, gcc_mss_q6_bimc_axi_clk
+0x8a040 (bus), gcc_mss_snoc_axi_clk 0x8a03c, gcc_bimc_mss_q6_axi_clk 0x4401c;
+gcc_boot_rom_ahb_clk (mem): vote bit 10 of 0x52004, status at 0x38004. GCC_MSS_RESTART 0x79000
+(the DT's 0x179000 absolute). No MSS power domain in GCC. Upstream GCC has no "gpll0_mss" clock.
+Halt registers (stock DT, TCSR): q6 0x1f63000, modem 0x1f65000, nc 0x1f64000 (HALTREQ +0,
+HALTACK +4, IDLE +8). smp2p-mpss: items 435 (in) / 428 (out), mailbox apcs bit 14, SPI 451.
+SMEM 0x86000000 + 0x200000, hwlock tcsr-mutex 0x1f40000 lock 3. APCS 0x17911000.
