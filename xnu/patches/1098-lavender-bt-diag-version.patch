@@ -1,0 +1,31 @@
+lavender: Bluetooth control - chip debug ACL kept, Broadcom version reported (generator: xnu/src/mk_bt14.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 5c5a308..16a7b7d 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -831,7 +831,23 @@ bt_serve(void)
+ 				continue;
+ 			}
+ 			if (need != 0 && have >= need) {
+-				ctl_up(pkt, need);      /* dropped when nobody is connected */
++				uint16_t h = (uint16_t)((pkt[1] | (pkt[2] << 8)) & 0x0fff);
++				if (pkt[0] == 0x02 && (h == 0x2edc || h == 0x2edd)) {
++					static uint32_t diag;
++					if (diag++ % 100 == 0) {
++						LOG("rx: chip debug ACL %#x kept here (%u so far)", h, diag);
++					}
++				} else {
++					if (pkt[0] == 0x04 && pkt[1] == 0x0e && need >= 15 && pkt[4] == 0x01 && pkt[5] == 0x10 && pkt[6] == 0) {
++						LOG("Read_Local_Version: chip manufacturer %#x subversion %#x -> Broadcom 0xf / 0x420e",
++						    pkt[11] | (pkt[12] << 8), pkt[13] | (pkt[14] << 8));
++						pkt[11] = 0x0f;
++						pkt[12] = 0x00;
++						pkt[13] = 0x0e;
++						pkt[14] = 0x42;
++					}
++					ctl_up(pkt, need);      /* dropped when nobody is connected */
++				}
+ 				have = 0;
+ 			}
+ 		}
