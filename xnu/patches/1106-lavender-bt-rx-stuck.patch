@@ -1,7 +1,7 @@
 lavender: Bluetooth control - force stale, stuck packet and overrun diagnostics (generator: xnu/src/mk_bt22.py)
 
 diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
-index 0e6073f..7e60c87 100644
+index 0e6073f..396da6b 100644
 --- a/iokit/Kernel/arm/LavenderBT.cpp
 +++ b/iokit/Kernel/arm/LavenderBT.cpp
 @@ -825,13 +825,32 @@ bt_serve(void)
@@ -22,7 +22,7 @@ index 0e6073f..7e60c87 100644
  		if (rx_head == rx_tail) {
  			IOSleep(1);
 +			idle_ms++;
-+			if (idle_ms == 5 && rx_taken != 0) {
++			if (idle_ms == 5) {
 +				wr(uart, U_CR, CR_FORCE_STALE);         /* the tail of this transfer out of the FIFO */
 +			}
 +			if (idle_ms == 50 && have != 0) {

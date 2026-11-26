@@ -9,7 +9,7 @@ after the following session's reset - an answer is held back until the chip send
 Either the UART keeps the tail of a transfer (no stale event) or the packet cutter waits inside
 a packet whose length it misread (one lost byte in front of a long debug ACL is enough). Now:
 - every 1 ms poll also looks at SR (overrun bit 4) and logs overruns, and a FORCE_STALE is issued
-  when bytes have been taken from this transfer but none came for 5 ms, so a tail cannot stay in
+  when no byte came for 5 ms, so a tail cannot stay in
   the FIFO;
 - the packet cutter logs and drops a packet that is still incomplete 50 ms after its last byte
   (type, header, have/need), and then looks for the next packet start.
@@ -50,7 +50,7 @@ sub('''	static uint8_t pkt[4 + 65536];
 		if (rx_head == rx_tail) {
 			IOSleep(1);
 			idle_ms++;
-			if (idle_ms == 5 && rx_taken != 0) {
+			if (idle_ms == 5) {
 				wr(uart, U_CR, CR_FORCE_STALE);         /* the tail of this transfer out of the FIFO */
 			}
 			if (idle_ms == 50 && have != 0) {
