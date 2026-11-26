@@ -1,0 +1,68 @@
+lavender: QMUX bridge logs each QMI message with its first bytes, qmux_log=N (generator: xnu/src/mk_qmuxlog.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 21b4361..f70434f 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5015,6 +5015,32 @@ svc_announce(void)
+ static struct { bool used; uint8_t chan, svc, cid; uint32_t node, port; } qmux_cl[QMUX_CLIENTS];
+ static struct { uint8_t *data; uint32_t len; uint8_t chan; } qmux_ring[QMUX_RING];
+ static unsigned qmux_head, qmux_tail, qmux_logged;
++static uint32_t qmux_log_max = 1500;
++
++/* one bridged message: direction, service, client, message id, the bytes after the QMI header */
++static void
++qmux_log(const char *dir, unsigned chan, uint8_t svc, uint8_t cid, const uint8_t *sdu, uint32_t len)
++{
++	static bool parsed;
++	char hex[3 * 40 + 1];
++	uint32_t hdr = svc == 0 ? 6 : 7, n = 0;
++	uint16_t msg = 0;
++
++	if (!parsed) {
++		parsed = true;
++		(void)PE_parse_boot_argn("qmux_log", &qmux_log_max, sizeof(qmux_log_max));
++	}
++	if (qmux_logged++ >= qmux_log_max || len < 5) {
++		return;
++	}
++	memcpy(&msg, sdu + (svc == 0 ? 2 : 3), 2);
++	hex[0] = 0;
++	for (uint32_t i = hdr; i < len && n < 40; i++, n++) {
++		snprintf(hex + 3 * n, 4, "%02x ", sdu[i]);
++	}
++	LOG("qmux%u %s svc %#x %s client %u msg %#x%s, %u bytes: %s", chan + 1, dir, svc, svc_name(svc), cid, msg,
++	    (sdu[0] & (svc == 0 ? 2 : 4)) ? " IND" : (sdu[0] & (svc == 0 ? 1 : 2)) ? " rsp" : "", len, hex);
++}
+ static IOLock *qmux_lock;
+ static void (*qmux_rx_fn)(unsigned chan, const uint8_t *frame, uint32_t len);
+ 
+@@ -5066,12 +5092,7 @@ qmux_deliver(unsigned chan, uint8_t svc, uint8_t cid, const uint8_t *sdu, uint32
+ 	f[4] = svc;
+ 	f[5] = cid;
+ 	memcpy(f + 6, sdu, len);
+-	if (qmux_logged++ < 120) {
+-		uint16_t msg = 0;
+-		memcpy(&msg, sdu + (svc == 0 ? 2 : 3), len >= 5 ? 2 : 0);
+-		LOG("qmux%u <- svc %#x client %u msg %#x, %u bytes%s", chan + 1, svc, cid, msg, len,
+-		    len > 0 && (sdu[0] & (svc == 0 ? 2 : 4)) ? " (indication)" : "");
+-	}
++	qmux_log("<-", chan, svc, cid, sdu, len);
+ 	if (qmux_rx_fn != NULL) {
+ 		qmux_rx_fn(chan, f, 6 + len);
+ 	}
+@@ -5234,13 +5255,7 @@ qmux_pump(void)
+ 			uint8_t svc = f[at + 4], cid = f[at + 5];
+ 			const uint8_t *sdu = f + at + 6;
+ 			uint32_t slen = flen - 5u;
+-			if (qmux_logged++ < 120) {
+-				uint16_t msg = 0;
+-				if (slen >= 5) {
+-					memcpy(&msg, sdu + (svc == 0 ? 2 : 3), 2);
+-				}
+-				LOG("qmux%u -> svc %#x client %u msg %#x, %u bytes", chan + 1, svc, cid, msg, slen);
+-			}
++			qmux_log("->", chan, svc, cid, sdu, slen);
+ 			if (svc == 0) {
+ 				qmux_ctl(chan, sdu, slen);
+ 			} else {
