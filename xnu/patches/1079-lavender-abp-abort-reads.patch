@@ -1,0 +1,57 @@
+lavender: pending reads completed as aborted at close and at a baseband reset, so the old transport can go (generator: xnu/src/mk_abp10.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index 1ed2627..c74c5ee 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -314,21 +314,34 @@ AppleBasebandPCIInterface::rx(const void *data, uint32_t len)
+ void
+ AppleBasebandPCIInterface::dropRead(void)
+ {
++	unsigned aborted = 0;
+ 	for (;;) {
+ 		IOLockLock(lv_abp_lock);
+ 		IOMemoryDescriptor *md = NULL;
+-		if (fRdCount != 0) {
++		OSAsyncReference64 ref;
++		bool have = fRdCount != 0;
++		if (have) {
+ 			md = fRd[fRdHead].md;
++			bcopy(fRd[fRdHead].ref, ref, sizeof(ref));
+ 			fRd[fRdHead].md = NULL;
+ 			fRdHead = (fRdHead + 1) % LV_ABP_QMAX;
+ 			fRdCount--;
+ 		}
+ 		IOLockUnlock(lv_abp_lock);
+-		if (md == NULL) {
++		if (!have) {
+ 			break;
+ 		}
+-		md->complete();
+-		md->release();
++		if (md != NULL) {
++			md->complete();
++			md->release();
++		}
++		/* the client's transport lives until each of its reads is completed (mk_abp10.py) */
++		uint64_t zero = 0;
++		(void)lv_abp_async_done(ref, (IOReturn)0xE00002EB, &zero, 1);
++		aborted++;
++	}
++	if (aborted != 0) {
++		IOLog("LV ABP %s: %u pending read(s) completed as aborted\n", fName, aborted);
+ 	}
+ }
+ 
+@@ -411,6 +424,11 @@ lv_abp_set_stage(uint32_t stage)
+ 	}
+ 	if (stage == LV_ABP_OFF) {
+ 		lv_qmux_reset();
++		for (unsigned i = 0; i < LV_ABP_NIF; i++) {     /* the old transports must be able to go (mk_abp10.py) */
++			if (lv_abp_if[i] != NULL) {
++				lv_abp_if[i]->dropRead();
++			}
++		}
+ 	}
+ 	if (stage == LV_ABP_MISSION && lv_abp_bb != NULL) {
+ 		IOReturn r = lv_abp_bb->messageClients(0xE3FF8001, NULL, 0);
