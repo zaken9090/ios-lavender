@@ -1,0 +1,24 @@
+lavender: lv_mgreset=2/3 swaps the MobileGestalt cache with the saved one (generator: xnu/src/mk_mgswap.py)
+
+diff --git a/bsd/dev/topaz_fw.c b/bsd/dev/topaz_fw.c
+index c6339be..fcf25ae 100644
+--- a/bsd/dev/topaz_fw.c
++++ b/bsd/dev/topaz_fw.c
+@@ -436,8 +436,16 @@ lavender_userland_install(void)
+ #define LV_MG "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/" 	"Library/Caches/com.apple.MobileGestalt.plist"
+ 		static const char mg[] = LV_MG;
+ 		uint32_t mgreset = 0;
+-		if (PE_parse_boot_argn("lv_mgreset", &mgreset, sizeof(mgreset)) && mgreset != 0 && lv_exists(mg)) {
++		PE_parse_boot_argn("lv_mgreset", &mgreset, sizeof(mgreset));
++		if (mgreset == 1 && lv_exists(mg)) {
+ 			printf("LVINSTALL MobileGestalt cache -> .lv-old: %d\n", sweet_rename(mg, LV_MG ".lv-old"));
++		} else if (mgreset == 2 && lv_exists(LV_MG ".lv-old")) {
++			/* lavender (xnu/src/mk_mgswap.py): the cache from before e115 back */
++			int a = lv_exists(mg) ? sweet_rename(mg, LV_MG ".lv-new") : 0;
++			printf("LVINSTALL MobileGestalt cache -> .lv-new %d, .lv-old -> cache %d\n", a, sweet_rename(LV_MG ".lv-old", mg));
++		} else if (mgreset == 3 && lv_exists(LV_MG ".lv-new")) {
++			int a = lv_exists(mg) ? sweet_rename(mg, LV_MG ".lv-old") : 0;
++			printf("LVINSTALL MobileGestalt cache -> .lv-old %d, .lv-new -> cache %d\n", a, sweet_rename(LV_MG ".lv-new", mg));
+ 		}
+ 	}
+ 	for (unsigned i = 0; i < sizeof(rootf) / sizeof(rootf[0]); i++) {
