@@ -1,0 +1,411 @@
+"""lavender: Bluetooth B2 - Qualcomm firmware, address, and a proper receive path (patch 1088).
+
+Run e96: with RTS/CTS the WCN3990 answers (HCI_Reset, Read_Local_Version: manufacturer 0x1D =
+Qualcomm), but the bytes came out of order: the polled receive took partial FIFO words as whole.
+
+- Receive: UARTDM's own accounting (Linux msm_handle_rx_dm): words in the FIFO before a stale
+  event are full (4 bytes); at the stale event RX_TOTAL_SNAP tells how many bytes of this transfer
+  there were, so the last word gives only the rest. Bytes go to a ring; H4 packets are parsed out.
+- Firmware (Linux btqca qca_uart_setup): EDL version (0xFC00 {0x19} -> vendor event 0xFF {00 02
+  product u32, patch u16, rom u16, soc_id u32}), rom = ((soc << 16 | rom) & 0xf00) >> 4 | & 0xf;
+  image/crbtfw<rom>.tlv then image/crnv<rom>.bin from the "bluetooth" partition (FAT16, 4096-byte
+  sectors, read here), each as 243-byte segments of 0xFC00 {0x1E, len, data}; a segment is
+  answered by vendor event {00 04 result} unless the patch's download mode skips it (not the last).
+  NVM edits as btqca: HCI tag 17 data[0] |= 0x80, data[2] = baud code 0 (115200 kept for now);
+  deep-sleep tag 27: bit 0 cleared (no in-band sleep bytes on the line - iOS's H4 would not
+  understand them; Linux sets it).
+- Then HCI_Reset, Read_Local_Version, the address from the modem's NV 447 (0xFC14, 6 bytes as
+  stored), Read_BD_ADDR (logged masked).
+
+usage: python mk_bt4.py XNU_TREE   (after mk_bt3.py)
+"""
+import sys
+
+tree = sys.argv[1]
+path = f'{tree}/iokit/Kernel/arm/LavenderBT.cpp'
+s = open(path, newline='').read()
+
+
+def sub(old, new):
+    global s
+    assert s.count(old) == 1, (old[:70], s.count(old))
+    s = s.replace(old, new)
+
+
+# --- receive path
+sub('''/* one received byte, -1 if none (msm_poll_get_char_dm) */
+static int
+bt_get(void)
+{''', r'''/* receive ring, filled by bt_rx_poll() (Linux msm_handle_rx_dm, polled) */
+#define U_ISR               0x14                /* read (raw; MISR is masked by IMR = 0) */
+#define U_SNAP              0x38
+#define MISR_RXSTALE        (1u << 3)
+static uint8_t rx_ring[8192];
+static uint32_t rx_head, rx_tail, rx_taken;     /* rx_taken: bytes of the current transfer already read */
+
+static void
+rx_push(uint8_t c)
+{
+	if (rx_tail - rx_head < sizeof(rx_ring)) {
+		rx_ring[rx_tail++ % sizeof(rx_ring)] = c;
+	}
+}
+
+static void
+bt_rx_poll(void)
+{
+	if (rd(uart, U_ISR) & MISR_RXSTALE) {
+		uint32_t snap = rd(uart, U_SNAP);
+		int32_t left = (int32_t)(snap - rx_taken);
+		while (left > 0 && (rd(uart, U_SR) & SR_RX_READY)) {
+			uint32_t w = rd(uart, U_RF);
+			for (int i = 0; i < 4 && left > 0; i++, left--) {
+				rx_push((uint8_t)(w >> (8 * i)));
+			}
+		}
+		rx_taken = 0;
+		wr(uart, U_CR, CR_RESET_STALE);
+		wr(uart, U_DMRX, 0xFFFFFF);
+		wr(uart, U_CR, CR_STALE_EN);
+		return;
+	}
+	/* words before the stale event are full */
+	while (rd(uart, U_SR) & SR_RX_READY) {
+		uint32_t w = rd(uart, U_RF);
+		for (int i = 0; i < 4; i++) {
+			rx_push((uint8_t)(w >> (8 * i)));
+		}
+		rx_taken += 4;
+	}
+}
+
+static int
+bt_byte(unsigned wait_ms)
+{
+	for (unsigned t = 0; t <= wait_ms * 10; t++) {
+		if (rx_head == rx_tail) {
+			bt_rx_poll();
+		}
+		if (rx_head != rx_tail) {
+			return rx_ring[rx_head++ % sizeof(rx_ring)];
+		}
+		IODelay(100);
+	}
+	return -1;
+}
+
+/* the next H4 event (code, parameters); false on timeout. Other packet types are dropped. */
+static bool
+bt_event(uint8_t *code, uint8_t *param, uint8_t *plen, unsigned wait_ms)
+{
+	for (;;) {
+		int t = bt_byte(wait_ms);
+		if (t < 0) {
+			return false;
+		}
+		if (t == 0x04) {
+			int c = bt_byte(50), l = c < 0 ? -1 : bt_byte(50);
+			if (l < 0) {
+				return false;
+			}
+			for (int i = 0; i < l; i++) {
+				int b = bt_byte(50);
+				if (b < 0) {
+					return false;
+				}
+				param[i] = (uint8_t)b;
+			}
+			*code = (uint8_t)c;
+			*plen = (uint8_t)l;
+			return true;
+		}
+		/* ACL 0x02 / SCO 0x03 / anything else: skip by its length when known */
+		if (t == 0x02) {
+			int h1 = bt_byte(50), h2 = bt_byte(50), l1 = bt_byte(50), l2 = bt_byte(50);
+			if (l2 < 0) {
+				return false;
+			}
+			(void)h1; (void)h2;
+			for (int i = 0; i < (l1 | (l2 << 8)); i++) {
+				(void)bt_byte(50);
+			}
+		}
+	}
+}
+
+static void
+bt_send(uint16_t opcode, const uint8_t *param, uint8_t plen)
+{
+	uint8_t pkt[4 + 255];
+	pkt[0] = 0x01;
+	pkt[1] = (uint8_t)opcode;
+	pkt[2] = (uint8_t)(opcode >> 8);
+	pkt[3] = plen;
+	if (plen != 0) {
+		memcpy(pkt + 4, param, plen);
+	}
+	bt_put(pkt, 4u + plen);
+}
+
+/* a command and its Command Complete; *status = its status byte; returns the CC parameters */
+static bool
+bt_cmd_cc(uint16_t opcode, const uint8_t *param, uint8_t plen, uint8_t *ret, uint8_t *rlen)
+{
+	uint8_t code, buf[255], l;
+	bt_send(opcode, param, plen);
+	for (int n = 0; n < 8; n++) {
+		if (!bt_event(&code, buf, &l, 1000)) {
+			return false;
+		}
+		if (code == 0x0e && l >= 3 && (buf[1] | (buf[2] << 8)) == opcode) {
+			memcpy(ret, buf + 3, l - 3u);
+			*rlen = (uint8_t)(l - 3);
+			return true;
+		}
+		if (code == 0x0f && l >= 4 && (buf[2] | (buf[3] << 8)) == opcode && buf[0] != 0) {
+			ret[0] = buf[0];
+			*rlen = 1;
+			return true;           /* command status: failed */
+		}
+	}
+	return false;
+}
+
+/* a Qualcomm EDL command (0xFC00) and its vendor event {00, rtype, ...} */
+static bool
+bt_edl(const uint8_t *param, uint8_t plen, uint8_t rtype, uint8_t *ret, uint8_t *rlen, bool wait)
+{
+	uint8_t code, buf[255], l;
+	bt_send(0xFC00, param, plen);
+	if (!wait) {
+		return true;
+	}
+	for (int n = 0; n < 8; n++) {
+		if (!bt_event(&code, buf, &l, 1500)) {
+			return false;
+		}
+		if (code == 0xff && l >= 2 && buf[0] == 0x00 && buf[1] == rtype) {
+			memcpy(ret, buf + 2, l - 2u);
+			*rlen = (uint8_t)(l - 2);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* ---- the "bluetooth" partition: FAT16, any sector size (4096 here) */
+extern "C" int sweet_ufs_read_part(const char *want, uint64_t off, void *dst, uint64_t len);
+
+static uint8_t *
+bt_fat_file(const char *name83, uint32_t *size_out)
+{
+	uint8_t bs[512];
+	if (sweet_ufs_read_part("bluetooth", 0, bs, sizeof(bs)) != 0 || bs[510] != 0x55 || bs[511] != 0xaa) {
+		LOG("firmware: no FAT boot sector on the bluetooth partition");
+		return NULL;
+	}
+	uint32_t bps = bs[11] | (bs[12] << 8), spc = bs[13], res = bs[14] | (bs[15] << 8), nfat = bs[16];
+	uint32_t roots = bs[17] | (bs[18] << 8), fatsz = bs[22] | (bs[23] << 8);
+	uint32_t fat_off = res * bps, root_off = fat_off + nfat * fatsz * bps, root_len = (roots * 32 + bps - 1) / bps * bps;
+	uint32_t data = root_off + root_len, clus = spc * bps, fatbytes = fatsz * bps;
+	uint16_t *fat = (uint16_t *)IOMallocData(fatbytes);
+	uint8_t *dir = (uint8_t *)IOMallocData(root_len > clus ? root_len : clus);
+	uint8_t *out = NULL;
+	uint32_t img = 0, first = 0, size = 0;
+	if (fat == NULL || dir == NULL || sweet_ufs_read_part("bluetooth", fat_off, fat, fatbytes) != 0 ||
+	    sweet_ufs_read_part("bluetooth", root_off, dir, root_len) != 0) {
+		goto done;
+	}
+	for (uint32_t o = 0; o + 32 <= root_len && dir[o] != 0; o += 32) {
+		if (memcmp(dir + o, "IMAGE      ", 11) == 0 && (dir[o + 11] & 0x10)) {
+			img = dir[o + 26] | (dir[o + 27] << 8);
+		}
+	}
+	for (uint32_t c = img; c >= 2 && c < 0xfff8 && first == 0; c = fat[c]) {
+		if (sweet_ufs_read_part("bluetooth", data + (uint64_t)(c - 2) * clus, dir, clus) != 0) {
+			break;
+		}
+		for (uint32_t o = 0; o + 32 <= clus && dir[o] != 0; o += 32) {
+			if (memcmp(dir + o, name83, 11) == 0) {
+				first = dir[o + 26] | (dir[o + 27] << 8);
+				size = dir[o + 28] | (dir[o + 29] << 8) | (dir[o + 30] << 16) | ((uint32_t)dir[o + 31] << 24);
+				break;
+			}
+		}
+	}
+	if (first == 0 || size == 0 || size > (1u << 20)) {
+		LOG("firmware: %.11s not found", name83);
+		goto done;
+	}
+	out = (uint8_t *)IOMallocData(size);
+	if (out != NULL) {
+		uint32_t at = 0;
+		for (uint32_t c = first; at < size && c >= 2 && c < 0xfff8; c = fat[c]) {
+			uint32_t n = size - at < clus ? size - at : clus;
+			if (sweet_ufs_read_part("bluetooth", data + (uint64_t)(c - 2) * clus, out + at, n) != 0) {
+				break;
+			}
+			at += n;
+		}
+		if (at != size) {
+			IOFreeData(out, size);
+			out = NULL;
+		} else {
+			*size_out = size;
+		}
+	}
+done:
+	if (fat != NULL) {
+		IOFreeData(fat, fatbytes);
+	}
+	if (dir != NULL) {
+		IOFreeData(dir, root_len > clus ? root_len : clus);
+	}
+	return out;
+}
+
+/* one TLV file as 243-byte segments (btqca qca_download_firmware) */
+static bool
+bt_download(const char *what, uint8_t *data, uint32_t size, bool patch)
+{
+	uint8_t mode = 0, seg[2 + 243], ret[64], rlen;
+	if (size < 4) {
+		return false;
+	}
+	if (patch && size >= 4 + 10) {
+		mode = data[4 + 10];                    /* tlv_type_patch.download_mode */
+	}
+	if (!patch) {
+		uint32_t len = (data[1] | (data[2] << 8) | ((uint32_t)data[3] << 16));
+		for (uint32_t idx = 0; idx + 12 <= len && 4 + idx + 12 <= size;) {
+			uint8_t *t = data + 4 + idx;
+			uint16_t id = (uint16_t)(t[0] | (t[1] << 8)), tl = (uint16_t)(t[2] | (t[3] << 8));
+			if (id == 17 && tl >= 3) {
+				t[12] |= 0x80;
+				t[14] = 0;              /* 115200 */
+			} else if (id == 27 && tl >= 1) {
+				t[12] &= (uint8_t)~1u;  /* no in-band sleep */
+			}
+			idx += 12u + tl;
+		}
+	}
+	LOG("firmware: %s, %u bytes, download mode %u", what, size, mode);
+	for (uint32_t at = 0, n = 0; at < size; n++) {
+		uint32_t len = size - at < 243 ? size - at : 243;
+		bool last = at + len >= size || len < 243;
+		bool wait = mode == 0 || last;
+		seg[0] = 0x1E;
+		seg[1] = (uint8_t)len;
+		memcpy(seg + 2, data + at, len);
+		if (!bt_edl(seg, (uint8_t)(2 + len), 0x04, ret, &rlen, wait)) {
+			LOG("firmware: %s segment %u: no answer", what, n);
+			return false;
+		}
+		if (wait && rlen >= 1 && ret[0] != 0) {
+			LOG("firmware: %s segment %u refused: %#x", what, n, ret[0]);
+			return false;
+		}
+		at += len;
+	}
+	return true;
+}
+
+extern "C" bool lv_bt_addr(uint8_t out[6]);     /* TopazModem.cpp: NV 447 */
+
+static void
+bt_setup(void)
+{
+	uint8_t req = 0x19, ret[255], rlen = 0;
+	/* start a clean receive transfer: empty the FIFO, re-arm stale */
+	while (rd(uart, U_SR) & SR_RX_READY) {
+		(void)rd(uart, U_RF);
+	}
+	wr(uart, U_CR, CR_RESET_STALE);
+	wr(uart, U_DMRX, 0xFFFFFF);
+	wr(uart, U_CR, CR_STALE_EN);
+	rx_head = rx_tail = rx_taken = 0;
+	if (!bt_edl(&req, 1, 0x02, ret, &rlen, true) || rlen < 12) {
+		LOG("version: no answer (%u bytes)", rlen);
+		return;
+	}
+	uint32_t product = ret[0] | (ret[1] << 8) | (ret[2] << 16) | ((uint32_t)ret[3] << 24);
+	uint16_t patch = (uint16_t)(ret[4] | (ret[5] << 8)), rom = (uint16_t)(ret[6] | (ret[7] << 8));
+	uint32_t soc = ret[8] | (ret[9] << 8) | (ret[10] << 16) | ((uint32_t)ret[11] << 24);
+	uint32_t soc_ver = (soc << 16) | rom;
+	uint8_t romv = (uint8_t)(((soc_ver & 0xf00) >> 4) | (soc_ver & 0xf));
+	LOG("version: product %#x patch %#x rom %#x soc %#x -> crbtfw%02x / crnv%02x", product, patch, rom, soc, romv, romv);
+	char n1[12], n2[12];
+	snprintf(n1, sizeof(n1), "CRBTFW%02XTLV", romv);
+	snprintf(n2, sizeof(n2), "CRNV%02X  BIN", romv);
+	uint32_t s1 = 0, s2 = 0;
+	uint8_t *f1 = bt_fat_file(n1, &s1), *f2 = f1 != NULL ? bt_fat_file(n2, &s2) : NULL;
+	bool ok = f1 != NULL && f2 != NULL && bt_download("rampatch", f1, s1, true);
+	if (ok) {
+		IOSleep(10);
+		ok = bt_download("nvm", f2, s2, false);
+	}
+	if (f1 != NULL) {
+		IOFreeData(f1, s1);
+	}
+	if (f2 != NULL) {
+		IOFreeData(f2, s2);
+	}
+	LOG("firmware: %s", ok ? "loaded" : "FAILED");
+	IOSleep(100);
+	if (bt_cmd_cc(0x0C03, NULL, 0, ret, &rlen)) {
+		LOG("HCI_Reset: status %#x", ret[0]);
+	}
+	if (bt_cmd_cc(0x1001, NULL, 0, ret, &rlen) && rlen >= 9) {
+		LOG("local version: status %#x hci %u rev %#x lmp %u manufacturer %#x subversion %#x", ret[0], ret[1],
+		    ret[2] | (ret[3] << 8), ret[4], ret[5] | (ret[6] << 8), ret[7] | (ret[8] << 8));
+	}
+	uint8_t addr[6];
+	if (lv_bt_addr(addr)) {
+		if (bt_cmd_cc(0xFC14, addr, 6, ret, &rlen)) {
+			LOG("address set: status %#x", ret[0]);
+		} else {
+			LOG("address set: no Command Complete");
+		}
+	}
+	if (bt_cmd_cc(0x1009, NULL, 0, ret, &rlen) && rlen >= 7) {
+		LOG("BD_ADDR: status %#x, %02x:%02x:%02x:**:**:**", ret[0], ret[6], ret[5], ret[4]);
+	}
+	LOG("B2 done");
+}
+
+/* one received byte, -1 if none (msm_poll_get_char_dm) */
+static int
+bt_get(void)
+{''')
+# replace the B1 probe commands by bt_setup()
+sub('''	uint8_t ver = 0x19;
+	bt_cmd("EDL version (FC00 19)", 0xFC00, &ver, 1);
+	bt_cmd("HCI_Reset", 0x0C03, NULL, 0);
+	bt_cmd("Read_Local_Version", 0x1001, NULL, 0);
+	LOG("B1 done");
+''', '''	bt_setup();
+''')
+sub('''	bt_drain("after the power-on pulse", 200);
+''', '''	(void)bt_cmd;
+''')
+open(path, 'w', newline='\n').write(s)
+
+# the address the modem's NV gave (TopazModem.cpp keeps it in bt_addr_nv)
+p = f'{tree}/iokit/Kernel/arm/TopazModem.cpp'
+t = open(p, newline='').read()
+anchor = '''static uint8_t bt_addr_nv[6];                           /* for the Bluetooth driver later */
+'''
+assert t.count(anchor) == 1
+t = t.replace(anchor, anchor + '''
+extern "C" bool
+lv_bt_addr(uint8_t out[6])
+{
+	if ((bt_addr_nv[0] | bt_addr_nv[1] | bt_addr_nv[2] | bt_addr_nv[3] | bt_addr_nv[4] | bt_addr_nv[5]) == 0) {
+		return false;
+	}
+	memcpy(out, bt_addr_nv, 6);
+	return true;
+}
+''')
+open(p, 'w', newline='\n').write(t)
+print('ok')
