@@ -1,0 +1,108 @@
+lavender: baseband PCI interface keeps up to 16 pending asynchronous reads (generator: xnu/src/mk_abp8.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index fd868ee..64c4524 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -226,11 +226,9 @@ public:
+ 	unsigned fIndex;
+ 	/* receive side: data for the client, and its one pending asynchronous read */
+ 	struct { uint8_t *data; uint32_t len; } fQ[LV_ABP_QMAX];
+-	unsigned fQHead, fQCount;
+-	bool fReadPending;
+-	OSAsyncReference64 fReadRef;
+-	IOMemoryDescriptor *fReadMD;
+-	uint32_t fReadMax;
++	unsigned fQHead, fQCount, fRxLogged;
++	struct { OSAsyncReference64 ref; IOMemoryDescriptor *md; uint32_t max; } fRd[LV_ABP_QMAX];
++	unsigned fRdHead, fRdCount;
+ 
+ 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+ 	bool matchPropertyTable(OSDictionary *table, SInt32 *score) APPLE_KEXT_OVERRIDE;
+@@ -278,19 +276,22 @@ void
+ AppleBasebandPCIInterface::rx(const void *data, uint32_t len)
+ {
+ 	IOLockLock(lv_abp_lock);
+-	if (fReadPending && fReadMD != NULL) {
+-		uint64_t n = len < fReadMax ? len : fReadMax;
++	if (fRdCount != 0) {
++		uint64_t n = len < fRd[fRdHead].max ? len : fRd[fRdHead].max;
+ 		OSAsyncReference64 ref;
+-		IOMemoryDescriptor *md = fReadMD;
+-		bcopy(fReadRef, ref, sizeof(ref));
+-		fReadPending = false;
+-		fReadMD = NULL;
++		IOMemoryDescriptor *md = fRd[fRdHead].md;
++		bcopy(fRd[fRdHead].ref, ref, sizeof(ref));
++		fRd[fRdHead].md = NULL;
++		fRdHead = (fRdHead + 1) % LV_ABP_QMAX;
++		fRdCount--;
+ 		IOLockUnlock(lv_abp_lock);
+ 		md->writeBytes(0, data, (IOByteCount)n);
+ 		md->complete();
+ 		md->release();
+ 		IOReturn r = lv_abp_async_done(ref, kIOReturnSuccess, &n, 1);
+-		IOLog("LV ABP %s: read completed, %llu bytes (%#x)\n", fName, n, r);
++		if (fRxLogged++ < 24 || r != kIOReturnSuccess) {
++			IOLog("LV ABP %s: read completed, %llu bytes (%#x)\n", fName, n, r);
++		}
+ 		return;
+ 	}
+ 	if (fQCount < LV_ABP_QMAX) {
+@@ -311,12 +312,19 @@ AppleBasebandPCIInterface::rx(const void *data, uint32_t len)
+ void
+ AppleBasebandPCIInterface::dropRead(void)
+ {
+-	IOLockLock(lv_abp_lock);
+-	IOMemoryDescriptor *md = fReadPending ? fReadMD : NULL;
+-	fReadPending = false;
+-	fReadMD = NULL;
+-	IOLockUnlock(lv_abp_lock);
+-	if (md != NULL) {
++	for (;;) {
++		IOLockLock(lv_abp_lock);
++		IOMemoryDescriptor *md = NULL;
++		if (fRdCount != 0) {
++			md = fRd[fRdHead].md;
++			fRd[fRdHead].md = NULL;
++			fRdHead = (fRdHead + 1) % LV_ABP_QMAX;
++			fRdCount--;
++		}
++		IOLockUnlock(lv_abp_lock);
++		if (md == NULL) {
++			break;
++		}
+ 		md->complete();
+ 		md->release();
+ 	}
+@@ -818,14 +826,15 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 				} else {
+ 					IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(in[0], in[1], kIODirectionIn, current_task());
+ 					bool ok = md != NULL && md->prepare() == kIOReturnSuccess;
+-					if (ok && !fItf->fReadPending) {
+-						bzero(fItf->fReadRef, sizeof(fItf->fReadRef));
++					if (ok && fItf->fRdCount < LV_ABP_QMAX) {
++						unsigned at = (fItf->fRdHead + fItf->fRdCount) % LV_ABP_QMAX;
++						bzero(fItf->fRd[at].ref, sizeof(fItf->fRd[at].ref));
+ 						for (uint32_t i = 0; i < args->asyncReferenceCount && i < kOSAsyncRef64Count; i++) {
+-							fItf->fReadRef[i] = args->asyncReference[i];
++							fItf->fRd[at].ref[i] = args->asyncReference[i];
+ 						}
+-						fItf->fReadMD = md;
+-						fItf->fReadMax = (uint32_t)in[1];
+-						fItf->fReadPending = true;
++						fItf->fRd[at].md = md;
++						fItf->fRd[at].max = (uint32_t)in[1];
++						fItf->fRdCount++;
+ 						IOLockUnlock(lv_abp_lock);
+ 					} else {
+ 						IOLockUnlock(lv_abp_lock);
+@@ -887,7 +896,7 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 		default: break;
+ 		}
+ 	}
+-	if (fCalls++ < 600) {
++	if (fCalls++ < 40 || ret != kIOReturnSuccess) {
+ 		IOLog("LV ABP %s: %s %s(%u)%s in %u [%llx %llx %llx %llx] struct in %u out %u/%u%s%s -> %#x\n", fWho, name, what, selector,
+ 		    async ? " async" : "", args->scalarInputCount, in[0], in[1], in[2], in[3], args->structureInputSize,
+ 		    args->scalarOutputCount, args->structureOutputSize, hex[0] ? " data " : "", hex, ret);
