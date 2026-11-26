@@ -1,0 +1,26 @@
+lavender: Bluetooth UART - re-arm DMRX/stale after every batch (generator: xnu/src/mk_bt29.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 76a0403..545a0b8 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -185,12 +185,19 @@ bt_rx_poll(void)
+ 		return;
+ 	}
+ 	/* words before the stale event are full */
++	bool got = false;
+ 	while (rd(uart, U_SR) & SR_RX_READY) {
+ 		uint32_t w = rd(uart, U_RF);
+ 		for (int i = 0; i < 4; i++) {
+ 			rx_push((uint8_t)(w >> (8 * i)));
+ 		}
+ 		rx_taken += 4;
++		got = true;
++	}
++	if (got) {
++		/* msm_handle_rx_dm: re-arm after every batch, not only at stale */
++		wr(uart, U_DMRX, 0xFFFFFF);
++		wr(uart, U_CR, CR_STALE_EN);
+ 	}
+ }
+ 
