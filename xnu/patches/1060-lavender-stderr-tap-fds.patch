@@ -1,0 +1,62 @@
+lavender: stderr tap takes date-prefixed lines on any descriptor (generator: xnu/src/mk_stderr2.py)
+
+diff --git a/bsd/kern/sys_generic.c b/bsd/kern/sys_generic.c
+index ce95c5e..2e62db1 100644
+--- a/bsd/kern/sys_generic.c
++++ b/bsd/kern/sys_generic.c
+@@ -713,14 +713,18 @@ sweet_stderr_wanted(struct proc *p)
+ 	return sweet_stderr_on > 0 && strncmp(p->p_comm, sweet_stderr_name, strlen(sweet_stderr_name)) == 0;
+ }
+ 
+-static void
+-sweet_stderr_tap(struct proc *p, user_addr_t buf, user_size_t len)
++static int
++sweet_stderr_tap(struct proc *p, user_addr_t buf, user_size_t len, int whole)
+ {
+ 	char line[481];
+ 	size_t n = len < sizeof(line) - 1 ? (size_t)len : sizeof(line) - 1;
+ 
+ 	if (n == 0 || copyin(buf, line, n) != 0) {
+-		return;
++		return 0;
++	}
++	/* not stderr: only text that starts with a date, as the log library's lines do */
++	if (!whole && !(n > 10 && line[0] == '2' && line[1] == '0' && line[4] == '-' && line[7] == '-')) {
++		return 0;
+ 	}
+ 	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+ 		n--;
+@@ -734,13 +738,14 @@ sweet_stderr_tap(struct proc *p, user_addr_t buf, user_size_t len)
+ 		}
+ 	}
+ 	printf("|%s| %s\n", p->p_comm, line);
++	return 1;
+ }
+ 
+ int
+ write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *retval)
+ {
+-	if (uap->fd == 2 && sweet_stderr_wanted(p)) {
+-		sweet_stderr_tap(p, uap->cbuf, uap->nbyte);
++	if (sweet_stderr_wanted(p)) {
++		(void)sweet_stderr_tap(p, uap->cbuf, uap->nbyte, uap->fd == 2);
+ 	}
+ 	return write_internal(p, uap->fd, uap->cbuf, uap->nbyte, (off_t)-1, 0,
+ 	           NULL, retval);
+@@ -839,12 +844,13 @@ out:
+ int
+ writev_nocancel(struct proc *p, struct writev_nocancel_args *uap, user_ssize_t *retval)
+ {
+-	if (uap->fd == 2 && uap->iovcnt > 0 && sweet_stderr_wanted(p)) {
++	if (uap->iovcnt > 0 && sweet_stderr_wanted(p)) {
+ 		struct user64_iovec v[8];
+ 		int cnt = uap->iovcnt < 8 ? uap->iovcnt : 8;
+ 		if (copyin(uap->iovp, v, sizeof(v[0]) * (size_t)cnt) == 0) {
+-			for (int i = 0; i < cnt; i++) {
+-				sweet_stderr_tap(p, v[i].iov_base, v[i].iov_len);
++			int take = sweet_stderr_tap(p, v[0].iov_base, v[0].iov_len, uap->fd == 2);
++			for (int i = 1; i < cnt && (take || uap->fd == 2); i++) {
++				(void)sweet_stderr_tap(p, v[i].iov_base, v[i].iov_len, 1);
+ 			}
+ 		}
+ 	}
