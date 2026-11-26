@@ -1,0 +1,95 @@
+lavender: audio A4b-1 - LPASS SMMU read, MI2S clock seen on the pins (generator: xnu/src/mk_audio7.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 6a8a7ff..cfc82de 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1340,6 +1340,72 @@ amp_status(const char *when)
+ 	    lv_amp_read(0x0002), lv_amp_read(0x0003), lv_amp_read(0x0004), lv_amp_read(0x0005), lv_amp_read(0x0006));
+ }
+ 
++/* ---- A4b-1 (mk_audio7.py): LPASS SMMU, read only, single 32-bit ldr */
++static volatile uint8_t *lp_smmu;
++static uint32_t
++lpr(uint32_t off)
++{
++	uint32_t v;
++	volatile uint8_t *a = lp_smmu + off;
++	__asm__ volatile ("dsb sy\n\tldr %w0, [%1]" : "=r"(v) : "r"(a) : "memory");
++	return v;
++}
++
++static void
++lpass_smmu_dump(void)
++{
++	volatile uint32_t *gcc = (volatile uint32_t *)ml_io_map(0x0017D000, 0x1000);
++	if (gcc == NULL) {
++		LOG("LPASS SMMU: GCC map failed");
++		return;
++	}
++	LOG("LPASS SMMU: GCC votes before: smmu clk %#x gdsc %#x", gcc[0x14 / 4], gcc[0x34 / 4]);
++	gcc[0x34 / 4] |= 1;                             /* hlos1_vote_lpass_adsp GDSC */
++	gcc[0x14 / 4] |= 1;                             /* hlos1_vote_lpass_adsp_smmu_clk */
++	IOSleep(5);
++	LOG("LPASS SMMU: GCC votes after: smmu clk %#x gdsc %#x", gcc[0x14 / 4], gcc[0x34 / 4]);
++	lp_smmu = (volatile uint8_t *)ml_io_map(0x05100000, 0x40000);
++	if (lp_smmu == NULL) {
++		LOG("LPASS SMMU: map failed");
++		return;
++	}
++	uint32_t id0 = lpr(0x20), id1 = lpr(0x24);
++	uint32_t nsmr = id0 & 0xFF, ncb = id1 & 0xFF;
++	uint32_t psize = (id1 & (1u << 31)) ? 0x10000 : 0x1000, npage = 1u << (((id1 >> 28) & 7) + 1);
++	LOG("LPASS SMMU: sCR0 %08x IDR0 %08x IDR1 %08x: %u SMRs, %u CBs, page %x x%u; GFSR %08x", lpr(0x0), id0, id1, nsmr, ncb, psize,
++	    npage, lpr(0x48));
++	for (uint32_t i = 0; i < nsmr && i < 32; i++) {
++		uint32_t smr = lpr(0x800 + 4 * i), s2cr = lpr(0xC00 + 4 * i);
++		if ((smr >> 31) == 0 && s2cr == 0) {
++			continue;
++		}
++		uint32_t cb = s2cr & 0xFF, cbp = npage * psize + cb * psize;
++		bool to_cb = ((s2cr >> 16) & 3) == 0 && cb < ncb && (uint64_t)cbp + psize <= 0x40000;
++		LOG("LPASS SMMU: [%u] SMR %08x (sid %#x mask %#x) S2CR %08x%s", i, smr, smr & 0xFFFF, (smr >> 16) & 0x7FFF, s2cr,
++		    to_cb ? "" : " (no bank)");
++		if (to_cb) {
++			LOG("LPASS SMMU:   CB%u CBAR %08x SCTLR %08x TCR %08x TTBR0 %08x%08x FSR %08x", cb, lpr(psize + 4 * cb), lpr(cbp),
++			    lpr(cbp + 0x30), lpr(cbp + 0x24), lpr(cbp + 0x20), lpr(cbp + 0x58));
++		}
++	}
++}
++
++/* GPIO 12 (SCK) and 13 (WS) levels while the port runs: a clock shows both */
++static void
++mi2s_sample(void)
++{
++	volatile uint32_t *g = (volatile uint32_t *)ml_io_map(0x03900000 + 0x1000 * 12, 0x2000);
++	if (g == NULL) {
++		return;
++	}
++	unsigned sck = 0, ws = 0;
++	for (unsigned i = 0; i < 20000; i++) {
++		sck += g[1] & 1;
++		ws += g[0x1000 / 4 + 1] & 1;
++	}
++	LOG("pri_mi2s pins: of 20000 reads SCK high %u, WS high %u (a running clock: both well between 0 and 20000)", sck, ws);
++}
++
+ /* A4a: amplifier set up, MI2S clocks through the AFE port, read the amplifier while they run, stop */
+ static void
+ a4a_test(void)
+@@ -1351,6 +1417,7 @@ a4a_test(void)
+ 		if (afe_i2s_config() && afe_port(true)) {
+ 			IOSleep(50);
+ 			amp_status("with clocks");
++			mi2s_sample();
+ 			IOSleep(2000);
+ 			amp_status("after 2 s");
+ 			afe_port(false);
+@@ -1359,6 +1426,7 @@ a4a_test(void)
+ 	}
+ 	lv_mi2s_pins(false);
+ 	LOG("A4a done (amp %s)", amp ? "set up" : "NOT set up");
++	lpass_smmu_dump();
+ }
+ #define GPR_DOMAIN_ADSP     2
+ #define GPR_DOMAIN_APPS     3
