@@ -1,0 +1,21 @@
+lavender: CRC complaint on the last board-data segment is not fatal (generator: xnu/src/mk_wlfwcrc.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 7fe83f7..0f4e0ac 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2484,10 +2484,13 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 		w_start_bdf();
+ 		break;
+ 	case WLFW_BDF_DOWNLOAD:
+-		if (!ok) {
++		if (!ok && !(w_bdf_off >= w_bdf_len && err == 1)) {
+ 			LOG("wlfw: bdf segment %u FAILED err %u", w_bdf_seg - 1, err);
+ 			break;
+ 		}
++		if (!ok) {
++			LOG("wlfw: last bdf segment: CRC complaint (error 1), not fatal (as Linux ath10k)");
++		}
+ 		if (w_bdf_off < w_bdf_len) {
+ 			w_bdf_segment();
+ 		} else {
