@@ -1,16 +1,17 @@
 lavender: Wi-Fi MAC from the modem NV item 4678 through DIAG (read only) (generator: xnu/src/mk_wlanmacnv.py)
 
 diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
-index f8dd9a6..16b18bb 100644
+index f8dd9a6..4992ba5 100644
 --- a/iokit/Kernel/arm/TopazModem.cpp
 +++ b/iokit/Kernel/arm/TopazModem.cpp
-@@ -801,6 +801,46 @@ static unsigned q_odd;
+@@ -801,6 +801,47 @@ static unsigned q_odd;
  #define PORT_DMSC           0x4005              /* our QMI client port towards DMS (mk_modemmode.py) */
  #define PORT_DIAG           0x4010              /* DIAG CNTL, DATA, DCI servers (mk_diagsrv.py) */
  #define PORT_UIMC           0x4006              /* our QMI client port towards UIM (mk_uimprov.py) */
 +#define PORT_DIAGC          0x4013              /* our DIAG command client (mk_wlanmacnv.py) */
 +static bool nv_mac_asked, nv_mac_done, persist_mac_done;
 +static uint8_t nv_mac[6];
++static void wlan_mac_set(const uint8_t *m);
 +
 +/* a DIAG NV_READ_F answer for item 4678, raw or HDLC framed: true when the address was taken */
 +static bool
@@ -51,7 +52,7 @@ index f8dd9a6..16b18bb 100644
  static bool uim_prov_asked;
  static uint32_t uim_node, uim_port;
  static uint32_t diag_msgs[3], diag_bytes[3];
-@@ -845,6 +885,20 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+@@ -845,6 +886,20 @@ qrtr_rx(const uint8_t *p, uint32_t len)
  			q_srv[q_srv_count].port = c->d;
  			q_srv_count++;
  		}
@@ -72,20 +73,33 @@ index f8dd9a6..16b18bb 100644
  		if (c->a == 2 && !dms_mode_sent) {              /* DMS: the wanted operating mode, once (mk_modemmode.py) */
  			uint32_t mode = 0;
  			dms_mode_sent = true;
-@@ -2524,7 +2578,11 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+@@ -2524,7 +2579,11 @@ wlfw_rx(const uint8_t *d, uint32_t len)
  			w_step = "WLAN ON (mission)";
  			LOG("*** WLAN ON (mission mode) ***");
  			if (wifi_enabled()) {
 -				(void)wlan_mac_from_persist();  /* mk_wlanmac.py */
 +				persist_mac_done = wlan_mac_from_persist();     /* mk_wlanmac.py */
 +				if (!persist_mac_done && nv_mac[0] | nv_mac[1] | nv_mac[2] | nv_mac[3] | nv_mac[4] | nv_mac[5]) {
-+					memcpy(our_mac, nv_mac, 6);         /* mk_wlanmacnv.py */
-+					LOG("wlan mac: %02x:%02x:%02x:**:**:** from the modem's NV (read only)", our_mac[0], our_mac[1], our_mac[2]);
++					wlan_mac_set(nv_mac);               /* mk_wlanmacnv.py */
++					LOG("wlan mac: %02x:%02x:%02x:**:**:** from the modem's NV (read only)", nv_mac[0], nv_mac[1], nv_mac[2]);
 +				}
  				IOSleep(100);
  				(void)ce_start();               /* only now: before mission a CE access hangs the bus */
  			}
-@@ -5702,6 +5760,16 @@ uim_prov_rx(const uint8_t *d, uint32_t len)
+@@ -3262,6 +3321,12 @@ static const uint16_t scan_freqs[] = {
+ #define NFREQ ((uint32_t)(sizeof(scan_freqs) / sizeof(scan_freqs[0])))
+ static uint8_t our_mac[6] = { 0x02, 0x54, 0x4F, 0x50, 0x41, 0x5A };   /* locally administered; persist's when found */
+ 
++static void
++wlan_mac_set(const uint8_t *m)
++{
++	memcpy(our_mac, m, 6);
++}
++
+ /* ---------------- read-only ext4 on a partition, for persist's wlan_mac.bin (mk_wlanmac.py) */
+ struct e4 {
+ 	const char *part;
+@@ -5702,6 +5767,16 @@ uim_prov_rx(const uint8_t *d, uint32_t len)
  static bool
  svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
  {

@@ -31,6 +31,7 @@ sub('''#define PORT_UIMC           0x4006              /* our QMI client port to
 #define PORT_DIAGC          0x4013              /* our DIAG command client (mk_wlanmacnv.py) */
 static bool nv_mac_asked, nv_mac_done, persist_mac_done;
 static uint8_t nv_mac[6];
+static void wlan_mac_set(const uint8_t *m);
 
 /* a DIAG NV_READ_F answer for item 4678, raw or HDLC framed: true when the address was taken */
 static bool
@@ -102,8 +103,17 @@ sub('''	if (dst_port >= PORT_DIAG && dst_port < PORT_DIAG + 3) {
 # use it when persist had nothing
 sub('''				(void)wlan_mac_from_persist();  /* mk_wlanmac.py */''', '''				persist_mac_done = wlan_mac_from_persist();     /* mk_wlanmac.py */
 				if (!persist_mac_done && nv_mac[0] | nv_mac[1] | nv_mac[2] | nv_mac[3] | nv_mac[4] | nv_mac[5]) {
-					memcpy(our_mac, nv_mac, 6);         /* mk_wlanmacnv.py */
-					LOG("wlan mac: %02x:%02x:%02x:**:**:** from the modem's NV (read only)", our_mac[0], our_mac[1], our_mac[2]);
+					wlan_mac_set(nv_mac);               /* mk_wlanmacnv.py */
+					LOG("wlan mac: %02x:%02x:%02x:**:**:** from the modem's NV (read only)", nv_mac[0], nv_mac[1], nv_mac[2]);
 				}''')
+sub('''static uint8_t our_mac[6] = { 0x02, 0x54, 0x4F, 0x50, 0x41, 0x5A };   /* locally administered; persist's when found */
+''', '''static uint8_t our_mac[6] = { 0x02, 0x54, 0x4F, 0x50, 0x41, 0x5A };   /* locally administered; persist's when found */
+
+static void
+wlan_mac_set(const uint8_t *m)
+{
+	memcpy(our_mac, m, 6);
+}
+''')
 open(path, 'w', newline='\n').write(s)
 print('ok')
