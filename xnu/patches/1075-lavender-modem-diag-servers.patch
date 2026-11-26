@@ -1,0 +1,51 @@
+lavender: host serves the modem DIAG sockets 0x1001/0,2,4 so its diag task is not starved (generator: xnu/src/mk_diagsrv.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index f092aa7..0daf435 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -798,6 +798,8 @@ svc_name(uint32_t svc)
+ static unsigned q_odd;
+ 
+ #define PORT_DMSC           0x4005              /* our QMI client port towards DMS (mk_modemmode.py) */
++#define PORT_DIAG           0x4010              /* DIAG CNTL, DATA, DCI servers (mk_diagsrv.py) */
++static uint32_t diag_msgs[3], diag_bytes[3];
+ static bool dms_mode_sent;
+ 
+ static void
+@@ -5019,6 +5021,16 @@ svc_announce(void)
+ 		qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, q_modem_node, QRTR_PORT_CTRL, &c, sizeof(c));
+ 	}
+ 	LOG("t=%u ms: announced pd-mapper 0x40, tftp 0x1000, rmtfs 0x0e", g_ms);
++	uint32_t diag = 1;
++	(void)PE_parse_boot_argn("modem_diag", &diag, sizeof(diag));
++	if (diag != 0) {
++		/* DIAG sockets of the modem: service 0x1001, instances 0 CNTL, 2 DATA, 4 DCI (mk_diagsrv.py) */
++		for (unsigned i = 0; i < 3; i++) {
++			struct qrtr_ctrl c = { QRTR_TYPE_NEW_SERVER, 0x1001, 2 * i, QRTR_NODE_APPS, PORT_DIAG + i };
++			qrtr_send(QRTR_TYPE_NEW_SERVER, QRTR_PORT_CTRL, q_modem_node, QRTR_PORT_CTRL, &c, sizeof(c));
++		}
++		LOG("t=%u ms: announced DIAG 0x1001 instances 0, 2, 4 (ports %#x..)", g_ms, PORT_DIAG);
++	}
+ }
+ 
+ /* ---------------------------------------------------------------- QMUX bridge (xnu/src/mk_qmux.py) */
+@@ -5322,6 +5334,18 @@ qmux_pump(void)
+ static bool
+ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
+ {
++	if (dst_port >= PORT_DIAG && dst_port < PORT_DIAG + 3) {
++		unsigned k = dst_port - PORT_DIAG;
++		diag_msgs[k]++;
++		diag_bytes[k] += len;
++		if (diag_msgs[k] <= 4 || (diag_msgs[k] & (diag_msgs[k] - 1)) == 0) {
++			LOG("t=%u ms: DIAG %s from %u:%x: message %u (%u bytes so far): %02x %02x %02x %02x %02x %02x %02x %02x", g_ms,
++			    k == 0 ? "CNTL" : k == 1 ? "DATA" : "DCI", src_node, src_port, diag_msgs[k], diag_bytes[k],
++			    len > 0 ? data[0] : 0, len > 1 ? data[1] : 0, len > 2 ? data[2] : 0, len > 3 ? data[3] : 0,
++			    len > 4 ? data[4] : 0, len > 5 ? data[5] : 0, len > 6 ? data[6] : 0, len > 7 ? data[7] : 0);
++		}
++		return true;
++	}
+ 	if (dst_port == PORT_DMSC) {
+ 		uint16_t msg = 0;
+ 		if (len >= 5) {
