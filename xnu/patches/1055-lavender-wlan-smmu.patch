@@ -1,7 +1,7 @@
 lavender: anoc2 SMMU of the Wi-Fi block: modem_smmu=1 dump, =2 identity stream 0x1a00 before the modem boots (generator: xnu/src/mk_wlansmmu.py)
 
 diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
-index 5fbd75e..f2870f9 100644
+index 5fbd75e..f0d3866 100644
 --- a/iokit/Kernel/arm/TopazModem.cpp
 +++ b/iokit/Kernel/arm/TopazModem.cpp
 @@ -1029,6 +1029,8 @@ rx_one(void)
@@ -23,7 +23,7 @@ index 5fbd75e..f2870f9 100644
  	lv_serror_report("summary");
  	static bool tz_once;
  	if (lv_serror_count != 0 && !tz_once) {
-@@ -5294,9 +5299,104 @@ tz_log_tail(void)
+@@ -5294,9 +5299,116 @@ tz_log_tail(void)
  	m->release();
  }
  
@@ -87,8 +87,10 @@ index 5fbd75e..f2870f9 100644
 +	if (!program) {
 +		return;
 +	}
-+	for (uint32_t i = ncb; i-- > 0;) {              /* the highest bank no valid stream uses */
-+		if (i < 64 && (used & (1ull << i)) == 0) {
++	uint32_t first = 0;
++	(void)PE_parse_boot_argn("modem_smmu_cb", &first, sizeof(first));
++	for (uint32_t i = first; i < ncb && i < 64; i++) {      /* the lowest bank no valid stream uses, as Linux picks */
++		if ((used & (1ull << i)) == 0) {
 +			cb = i;
 +			break;
 +		}
@@ -98,7 +100,13 @@ index 5fbd75e..f2870f9 100644
 +		return;
 +	}
 +	uint32_t gr1 = psize, cbp = npage * psize + cb * psize;
++	LOG("anoc2 smmu: CB%u at +%x, SMR%u; CBAR now %08x", cb, cbp, slot, a2r(gr1 + 4 * cb));
++	IOSleep(30);
++	LOG("anoc2 smmu: CB%u SCTLR now %08x FSR %08x", cb, a2r(cbp), a2r(cbp + 0x58));
++	IOSleep(30);
 +	a2w(cbp + 0x58, 0xFFFFFFFF);                    /* FSR: clear */
++	LOG("anoc2 smmu: CB%u FSR written", cb);
++	IOSleep(30);
 +	a2w(cbp + 0x20, 0);                             /* TTBR0 */
 +	a2w(cbp + 0x24, 0);
 +	a2w(cbp + 0x30, 0);                             /* TCR */
@@ -107,7 +115,11 @@ index 5fbd75e..f2870f9 100644
 +	a2w(cbp + 0x3C, 0);
 +	a2w(gr1 + 0x800 + 4 * cb, CB_CLONE_CBA2R);
 +	a2w(gr1 + 0x000 + 4 * cb, CB_CLONE_CBAR);
++	LOG("anoc2 smmu: CBAR/CBA2R written");
++	IOSleep(30);
 +	a2w(cbp + 0x0, CB_CLONE_SCTLR);                 /* SCTLR last: faults reported, no translation */
++	LOG("anoc2 smmu: SCTLR written");
++	IOSleep(30);
 +	a2w(0xC00 + 4 * slot, cb);                      /* S2CR: translate through this bank */
 +	a2w(0x800 + 4 * slot, (1u << 31) | (LV_WLAN_SID_MASK << 16) | LV_WLAN_SID);
 +	a2w(0x70, 0);                                   /* sTLBGSYNC */
