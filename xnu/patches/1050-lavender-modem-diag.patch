@@ -1,0 +1,91 @@
+lavender: modem diagnostics: modem_qdss=N, all GLINK opens acked, unserved QRTR packets logged, firmware dirs 8 deep, TZ log on SError (generator: xnu/src/mk_modemdiag.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index aa1225b..c56bf0f 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -795,6 +795,8 @@ svc_name(uint32_t svc)
+ 	}
+ }
+ 
++static unsigned q_odd;
++
+ static void
+ qrtr_rx(const uint8_t *p, uint32_t len)
+ {
+@@ -848,13 +850,22 @@ qrtr_rx(const uint8_t *p, uint32_t len)
+ 			qrtr_send(QRTR_TYPE_RESUME_TX, dst_port, src_node, src_port, &r, sizeof(r));
+ 		}
+ 		if (hlen + size <= len) {
+-			(void)svc_rx(src_node, src_port, dst_port, p + hlen, size);
++			if (!svc_rx(src_node, src_port, dst_port, p + hlen, size) && q_odd++ < 24) {
++				const uint8_t *d = p + hlen;
++				LOG("t=%u ms: qrtr data nobody serves: %u:%x -> port %x, %u bytes: %02x %02x %02x %02x %02x %02x %02x %02x", g_ms,
++				    src_node, src_port, dst_port, size, size > 0 ? d[0] : 0, size > 1 ? d[1] : 0, size > 2 ? d[2] : 0,
++				    size > 3 ? d[3] : 0, size > 4 ? d[4] : 0, size > 5 ? d[5] : 0, size > 6 ? d[6] : 0, size > 7 ? d[7] : 0);
++			}
+ 		}
+ 		break;
+ 	case QRTR_TYPE_RESUME_TX:
+ 		q_resumes++;
+ 		break;
+ 	default:
++		if (q_odd++ < 24) {
++			LOG("t=%u ms: qrtr control type %u from %u:%x to port %x: %x %x %x %x", g_ms, type, src_node, src_port, dst_port,
++			    c->a, c->b, c->c, c->d);
++		}
+ 		break;
+ 	}
+ }
+@@ -905,6 +916,8 @@ rx_one(void)
+ 			if (!g_open_sent) {
+ 				send_open();
+ 			}
++		} else {
++			send_cmd(CMD_OPEN_ACK, (uint16_t)m.p1, 0);     /* lavender: as Linux, every remote open is acked */
+ 		}
+ 		break;
+ 	}
+@@ -1018,6 +1031,8 @@ rx_one(void)
+ static struct smem_part_hdr *g_part;
+ static void smem_list(struct smem_part_hdr *p);
+ static void lv_serror_report(const char *when);
++static void tz_log_tail(void);
++extern "C" volatile uint32_t lv_serror_count;
+ 
+ static bool
+ glink_start(struct smem_part_hdr *part)
+@@ -1086,6 +1101,11 @@ glink_summary(void)
+ 	    q_modem_node, q_hello_rx, q_srv_count, q_resumes);
+ 	smem_list(g_part);
+ 	lv_serror_report("summary");
++	static bool tz_once;
++	if (lv_serror_count != 0 && !tz_once) {
++		tz_once = true;
++		tz_log_tail();
++	}
+ 	svc_summary();
+ 	for (unsigned i = 0; i < q_srv_count; i++) {
+ 		LOG("  service %x:%x node %u port %x %s", q_srv[i].svc, q_srv[i].inst, q_srv[i].node, q_srv[i].port, svc_name(q_srv[i].svc));
+@@ -1178,7 +1198,7 @@ fat_entries(const char *prefix, const uint8_t *e, uint32_t len, int depth)
+ 		uint32_t first = e[26] | ((uint32_t)e[27] << 8);
+ 		uint32_t size = e[28] | ((uint32_t)e[29] << 8) | ((uint32_t)e[30] << 16) | ((uint32_t)e[31] << 24);
+ 		if (e[11] & 0x10) {
+-			if (depth < 4) {
++			if (depth < 8) {
+ 				strlcat(full, "/", sizeof(full));
+ 				fat_dir(full, first, 0, 0, depth + 1);
+ 			}
+@@ -5186,8 +5206,10 @@ static bool
+ mss_mba_start(void)
+ {
+ 	/* Linux's proxy clock "qdss": RPM resource clk0 id 1, key STAT */
+-	bool qdss = topaz_rpm_write(0, 0x306b6c63u, 1, 0x54415453u, 1);
+-	LOG("RPM qdss clock on: %s", qdss ? "acked" : "FAILED");
++	uint32_t qdss_val = 1;
++	(void)PE_parse_boot_argn("modem_qdss", &qdss_val, sizeof(qdss_val));
++	bool qdss = qdss_val == 0 || topaz_rpm_write(0, 0x306b6c63u, 1, 0x54415453u, qdss_val);
++	LOG("RPM qdss clock, value %u: %s", qdss_val, qdss_val == 0 ? "not voted" : qdss ? "acked" : "FAILED");
+ 	if (!qdss) {
+ 		return false;
+ 	}
