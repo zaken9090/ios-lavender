@@ -1,0 +1,37 @@
+lavender: modem_wlfw=0 skips the WLFW handshake; MSA assign result logged; TZ log address check (generator: xnu/src/mk_modemwlfw.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index c56bf0f..253385c 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2207,7 +2207,7 @@ w_on_msa_info(const uint8_t *d, uint32_t len)
+ 			LOG(" out of the MSA window, skipped");
+ 			continue;
+ 		}
+-		(void)scm_assign(addr, size, vm, sec ? 2 : 3);
++		LOG(" handed to the modem: %d", (int)scm_assign(addr, size, vm, sec ? 2 : 3));
+ 	}
+ }
+ 
+@@ -2219,6 +2219,12 @@ wlfw_arrive(uint32_t node, uint32_t port)
+ 	if ((w_node != 0 || w_port != 0) && w_node == node && w_port == port) {
+ 		return;
+ 	}
++	uint32_t wl = 1;
++	(void)PE_parse_boot_argn("modem_wlfw", &wl, sizeof(wl));
++	if (wl == 0) {
++		LOG("WLFW left alone (modem_wlfw=0)");
++		return;
++	}
+ 	if (w_arrivals++ != 0) {
+ 		/* the WLAN PD restarted (new server port): start the handshake again */
+ 		LOG("t=%u ms: WLFW back on port %x (restart %u, last step: %s): handshake again", g_ms, port, w_arrivals - 1, w_step);
+@@ -5156,7 +5162,7 @@ tz_log_tail(void)
+ 	uint32_t pa = *(volatile uint32_t *)(p->getVirtualAddress() + 0x720);
+ 	p->release();
+ 	LOG("TZ log: area at %#x", pa);
+-	if (pa < 0x80000000u || (pa & 3) != 0) {
++	if (pa < 0x10000000u || (pa & 3) != 0) {
+ 		return;
+ 	}
+ 	const uint32_t area = 0x3000;
