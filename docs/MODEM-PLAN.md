@@ -57,3 +57,37 @@ today (no `modem=1` in the boot-args) and every address in it is topaz's.
 ## State
 
 - 2026-11-26: survey done, plan written. Next: step 1.
+
+## Reference for step 3: MBA boot of an SDM660 modem (summary of Linux qcom_q6v5_mss.c v6.6, MSS_SDM660)
+
+Resources (sdm660_mss): proxy clocks xo, qdss, mem; active clocks iface, bus, gpll0_mss, mnoc_axi,
+snoc_axi; power domains cx, mx; memory protection needed; no alt reset. Registers: qdsp6 base
+0x4080000, RMB base 0x4180000, MSS restart GCC 0x179000, halt regs (q6, modem, nc) from the DT.
+
+RMB (offsets from 0x4180000): MBA_IMAGE 0x00, PBL_STATUS 0x04, MBA_COMMAND 0x08, MBA_STATUS 0x0C,
+PMI_META_DATA 0x10, PMI_CODE_START 0x14, PMI_CODE_LENGTH 0x18. PBL success = 1. MBA status:
+1 XPU unlocked, 2 unlocked+scribbled, 3 metadata authenticated, 4 authentication complete,
+negative = error. Commands: 1 metadata ready, 2 load ready.
+
+QDSP6SS (offsets from 0x4080000): RESET 0x14 (bit0 STOP_CORE, bit1 CORE_ARES, bit2 BUS_ARES),
+GFMUX_CTL 0x20 (bit1 CLK_ENABLE), PWR_CTL 0x30, MEM_PWR_CTL (v6) 0x34, XO_CBCR 0x38 (bit0 enable,
+bit31 off), BHS_STATUS 0xC4 (bit0 ack), STRAP_ACC 0x110 (write 0x20). PWR_CTL bits: 24 BHS_ON,
+25 LDO_BYP, 22 CLAMP_QMC_MEM, 21 CLAMP_WL, 20 CLAMP_IO, 19 SLP_RET_N, 18 L2DATA_STBY_N.
+
+Order:
+1. cx/mx votes, proxy and active clocks on, MSS reset deasserted (GCC restart register = 0).
+2. Give the MPSS region and the MBA region to the modem (SCM assign: HLOS RWX -> MSS_MSA RW).
+3. mba.mbn copied to the MBA region; RMB MBA_IMAGE = its address.
+4. Q6 reset sequence: STRAP_ACC = 0x20; RESET |= core|bus|stop; XO_CBCR |= 1, wait bit31 clear;
+   PWR_CTL |= BHS_ON, wait BHS_STATUS bit0; PWR_CTL |= LDO_BYP; clear CLAMP_QMC_MEM;
+   PWR_CTL |= L2DATA_STBY_N | SLP_RET_N; MEM_PWR_CTL bits 28 down to 0 set one by one (1 us
+   apart); clear CLAMP_WL; clear CLAMP_IO; RESET &= ~CORE_ARES; GFMUX |= CLK_ENABLE;
+   RESET &= ~STOP_CORE. Wait PBL_STATUS != 0 (1 s), must be 1. Wait MBA_STATUS != 0 (5 s), 1 or 2.
+5. Metadata (ELF header + hash segment of modem.mdt) in a buffer assigned to the modem;
+   PMI_META_DATA = address; command 1; wait status 3 (1 s); buffer back to HLOS.
+6. PMI_CODE_LENGTH = 0. Each loadable segment copied to mpss + (paddr - reloc base), tail zeroed.
+   After the first: PMI_CODE_START = boot address, command 2. After every segment:
+   PMI_CODE_LENGTH = total so far; a negative status = authentication failed. While loading the
+   region is shared HLOS+MSA; at the end MSA only. Wait status 4 (10 s).
+
+- 2026-11-26: step 1 written (xnu 1043).
