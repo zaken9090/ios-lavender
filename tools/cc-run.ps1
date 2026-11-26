@@ -16,5 +16,8 @@ Set-Location $root
 $p = Start-Process powershell -ArgumentList "-NoProfile -File tools\quick.ps1 -Tag $Tag -Kernel `"$Kernel`" -Adt $Adt -Extra `"modem=1 lv_serror=1 modem_wlfw=0 abp=1 sweetstderr=CommCenter $Extra`" -NoBench" -PassThru -WindowStyle Hidden -RedirectStandardOutput "..\dump\quick-$Tag.txt"
 $null = $p.WaitForExit(240000)
 if (-not $p.HasExited) { $p.Kill() }
-Start-Sleep $Seconds
-Select-String -Path "..\dump\usblog-$Tag.txt" -Pattern $Pattern | ForEach-Object { $_.Line.Substring(0, [Math]::Min(300, $_.Line.Length)) } | Select-Object -First $First
+# quick.ps1 stops its logger at the ready line: keep logging for $Seconds into a second file
+$l = Start-Process python -ArgumentList "tools\usblog.py --wait $Seconds --out ..\dump\usblog-$Tag-c.txt" -PassThru -WindowStyle Hidden
+$null = $l.WaitForExit(($Seconds + 30) * 1000)
+if (-not $l.HasExited) { $l.Kill() }
+Select-String -Path "..\dump\usblog-$Tag.txt", "..\dump\usblog-$Tag-c.txt" -Pattern $Pattern | ForEach-Object { $_.Line.Substring(0, [Math]::Min(300, $_.Line.Length)) } | Select-Object -First $First
