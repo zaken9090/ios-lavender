@@ -91,3 +91,4 @@ Order:
    region is shared HLOS+MSA; at the end MSA only. Wait status 4 (10 s).
 
 - 2026-11-26: step 1 written (xnu 1043).
+- 2026-11-26: step 1 verified on the phone (kernel CI 45731435398): 316 files, image/mba.mbn 238256 bytes, image/modem.mdt 8412, image/wlanmdsp.mbn 3859712. Next: steps 2 and 3.
