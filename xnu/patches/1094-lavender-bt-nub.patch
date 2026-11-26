@@ -1,0 +1,19 @@
+lavender: an IOService nub for /arm-io/uart1/bluetooth (generator: xnu/src/mk_bt10.py)
+
+diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+index 5664a80..2d2c92b 100644
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -97,6 +97,12 @@ SweetPlatformExpert::processTopLevel(IORegistryEntry *root)
+ 		createNubs(this, IODTFindMatchingEntries(armio, kIODTExclusive, "('gic')"));
+ 		armio->release();
+ 	}
++	/* lavender (xnu/src/mk_bt10.py): the Bluetooth node under the UART, matched by name by bluetoothd */
++	IORegistryEntry *uart1 = root->childFromPath("arm-io/uart1", gIODTPlane);
++	if (uart1 != NULL) {
++		createNubs(this, IODTFindMatchingEntries(uart1, kIODTExclusive, NULL));
++		uart1->release();
++	}
+ }
+ 
+ /*

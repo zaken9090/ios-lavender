@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory)][string]$Kernel,
     [Parameter(Mandatory)][string]$Tag,
     [Parameter(Mandatory)][string[]]$Sets,
-    [int]$Seconds = 45
+    [int]$Seconds = 45,
+    [string]$Adt = "shim\out\lavender.adt"
 )
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -14,7 +15,7 @@ $i = 0
 foreach ($set in $Sets) {
     $i++
     $t = "$Tag-$i"
-    $p = Start-Process powershell -ArgumentList "-NoProfile -File tools\quick.ps1 -Tag $t -Kernel `"$Kernel`" -Extra `"modem=1 lv_serror=1 $set`" -NoBench" -PassThru -WindowStyle Hidden -RedirectStandardOutput "..\dump\quick-$t.txt"
+    $p = Start-Process powershell -ArgumentList "-NoProfile -File tools\quick.ps1 -Tag $t -Kernel `"$Kernel`" -Adt `"$Adt`" -Extra `"modem=1 lv_serror=1 $set`" -NoBench" -PassThru -WindowStyle Hidden -RedirectStandardOutput "..\dump\quick-$t.txt"
     $null = $p.WaitForExit(240000)
     if (-not $p.HasExited) { $p.Kill() }
     $log = "..\dump\usblog-$t.txt"
