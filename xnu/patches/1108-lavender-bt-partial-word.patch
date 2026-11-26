@@ -1,0 +1,15 @@
+lavender: Bluetooth UART - partial word read at the stale event (generator: xnu/src/mk_bt24.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index e1a2625..0d672d7 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -162,7 +162,7 @@ bt_rx_poll(void)
+ 	if ((rd(uart, U_ISR) | rd(uart, 0x10 /* MISR */)) & MISR_RXSTALE) {
+ 		uint32_t snap = rd(uart, U_SNAP);
+ 		int32_t left = (int32_t)(snap - rx_taken);
+-		while (left > 0 && (rd(uart, U_SR) & SR_RX_READY)) {
++		while (left > 0) {                      /* by count: a partial word has no RX_READY */
+ 			uint32_t w = rd(uart, U_RF);
+ 			for (int i = 0; i < 4 && left > 0; i++, left--) {
+ 				rx_push((uint8_t)(w >> (8 * i)));
