@@ -1,0 +1,19 @@
+lavender: Bluetooth UART - registers at a stuck packet (generator: xnu/src/mk_bt27.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index c6f775c..dc20309 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -866,6 +866,12 @@ bt_serve(void)
+ 				    pkt[0] == 0x02 && have >= 5 ? 5u + (pkt[3] | (pkt[4] << 8)) : 0;
+ 				LOG("rx: packet stuck: %02x %02x %02x %02x %02x have %u need %u - dropped", pkt[0], pkt[1], pkt[2],
+ 				    pkt[3], pkt[4], have, need);
++				LOG("rx: uart sr %#x isr %#x misr %#x rxfs %#x snap %u taken %u", rd(uart, U_SR), rd(uart, U_ISR), rd(uart, 0x10),
++				    rd(uart, U_RXFS), rd(uart, U_SNAP), rx_taken);
++				wr(uart, U_CR, CR_FORCE_STALE);
++				IOSleep(1);
++				LOG("rx: after FORCE_STALE: sr %#x isr %#x misr %#x rxfs %#x snap %u", rd(uart, U_SR), rd(uart, U_ISR),
++				    rd(uart, 0x10), rd(uart, U_RXFS), rd(uart, U_SNAP));
+ 				have = 0;
+ 			}
+ 			continue;
