@@ -1,0 +1,34 @@
+lavender: RPM QDSS clock voted on before the modem Q6 starts (generator: xnu/src/mk_modemqdss.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 23e5131..94c2b73 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5002,9 +5002,18 @@ mss_clk(const char *name, uint32_t reg, uint32_t bit, uint32_t status)
+ 	LOG("clock %s: %#x = %#x%s", name, status, v, (v & (1u << 31)) ? " (still off)" : "");
+ }
+ 
++extern "C" bool topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
++
+ static bool
+ mss_mba_start(void)
+ {
++	/* Linux's proxy clock "qdss": RPM resource clk0 id 1, key STAT */
++	bool qdss = topaz_rpm_write(0, 0x306b6c63u, 1, 0x54415453u, 1);
++	LOG("RPM qdss clock on: %s", qdss ? "acked" : "FAILED");
++	if (!qdss) {
++		return false;
++	}
++	IOSleep(20);
+ 	IOMemoryMap *g = map_phys(MSS_GCC_PA, 0x90000, false), *q = map_phys(MSS_Q6_PA, 0x1000, false);
+ 	IOMemoryMap *r = map_phys(MSS_RMB_PA, 0x1000, false), *h = map_phys(MSS_HALT_PA, 0x3000, false);
+ 	if (g == NULL || q == NULL || r == NULL || h == NULL) {
+@@ -5078,6 +5087,8 @@ mss_mba_start(void)
+ 	mss_wr(mss_q6, 0x30, mss_rd(mss_q6, 0x30) & ~(1u << 20));       /* I/O clamp off */
+ 	mss_wr(mss_q6, 0x14, mss_rd(mss_q6, 0x14) & ~2u);               /* core out of reset */
+ 	mss_wr(mss_q6, 0x20, mss_rd(mss_q6, 0x20) | 2);                 /* core clock */
++	LOG("Q6 powered (PWR_CTL %#x RESET %#x), releasing the core", mss_rd(mss_q6, 0x30), mss_rd(mss_q6, 0x14));
++	IOSleep(50);                                                    /* the line reaches the PC first */
+ 	mss_wr(mss_q6, 0x14, mss_rd(mss_q6, 0x14) & ~1u);               /* run */
+ 
+ 	int32_t pbl = mss_wait(0x04, 0, 1000);
