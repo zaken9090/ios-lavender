@@ -1,0 +1,36 @@
+lavender: audio A4b - tone length audio_secs (generator: xnu/src/mk_audio10.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index db7fba1..4791c18 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1616,19 +1616,25 @@ a4b_play(void)
+ 		uint32_t r[3] = { 0, 0, 0 };
+ 		if (apr_call("ASM run", 7, 0x0101, 0x0101, 0x00010DAAu, r, sizeof(r), &st)) {
+ 			LOG("A4b: amp on: AMP_EN %d GLOBAL_EN %d", lv_amp_write(0x003A, 0x01), lv_amp_write(0x00FF, 0x01));
+-			unsigned t0 = ms();
+-			while (ms() - t0 < 3000) {
++			uint32_t secs = 3;
++			(void)PE_parse_boot_argn("audio_secs", &secs, sizeof(secs));
++			secs = secs == 0 ? 3 : (secs > 30 ? 30 : secs);
++			unsigned t0 = ms(), last = t0;
++			while (ms() - t0 < secs * 1000u) {
+ 				if (!glink_poll()) {
+ 					IODelay(200);
+ 				}
+ 				qrtr_poll();
++				if (ms() - last >= 1000) {
++					last = ms();
++					amp_status("playing");
++				}
+ 			}
+-			amp_status("playing");
+ 			LOG("A4b: amp off: GLOBAL_EN %d AMP_EN %d", lv_amp_write(0x00FF, 0x00), lv_amp_write(0x003A, 0x00));
+ 		}
+ 	}
+ 	a4_playing = false;
+-	LOG("A4b: %u WRITE_DONE in 3 s (%u with an error status), 150 expected", a4_done, a4_bad);
++	LOG("A4b: %u WRITE_DONE (%u with an error status), 50 a second expected", a4_done, a4_bad);
+ 	(void)apr_call("ASM pause", 7, 0x0101, 0x0101, 0x00010BD3u, NULL, 0, &st);
+ close_adm:
+ 	if (adm_open) {
