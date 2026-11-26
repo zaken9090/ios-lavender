@@ -1,0 +1,280 @@
+lavender: with abp=1 the kernel unpacks the root's Mav17.Release.bbfw into the personalized baseband firmware folder (generator: xnu/src/mk_bbfw.py)
+
+diff --git a/bsd/dev/topaz_fw.c b/bsd/dev/topaz_fw.c
+index 654dd9d..fdf50b7 100644
+--- a/bsd/dev/topaz_fw.c
++++ b/bsd/dev/topaz_fw.c
+@@ -159,9 +159,252 @@ lv_copy(const char *from, const char *to)
+ 	return err < 0 ? 0 : err;
+ }
+ 
++/* ---- lavender: the baseband firmware folder (xnu/src/mk_bbfw.py) ---- */
++#include <libkern/zlib.h>
++#include <pexpert/device_tree.h>
++
++extern int sweet_mkdir(const char *path, int mode);
++
++/* mkdir -p */
++static int
++lv_mkdirs(const char *path)
++{
++	char part[256];
++	size_t n = strlen(path);
++	int err = 0;
++
++	if (n >= sizeof(part)) {
++		return ENAMETOOLONG;
++	}
++	for (size_t i = 1; i <= n; i++) {
++		if (path[i] == '/' || path[i] == 0) {
++			memcpy(part, path, i);
++			part[i] = 0;
++			if (!lv_exists(part)) {
++				err = sweet_mkdir(part, 0755);
++				if (err != 0 && err != EEXIST) {
++					printf("LVBBFW mkdir %s: %d\n", part, err);
++					return err;
++				}
++			}
++		}
++	}
++	return 0;
++}
++
++static int
++lv_pread(vnode_t vp, off_t off, void *buf, size_t len)
++{
++	vfs_context_t ctx = vfs_context_kernel();
++	int resid = 0;
++	int err = vn_rdwr(UIO_READ, vp, (caddr_t)buf, (int)len, off, UIO_SYSSPACE, 0, vfs_context_ucred(ctx), &resid,
++	    vfs_context_proc(ctx));
++	return err ? err : (resid != 0 ? EIO : 0);
++}
++
++static void *
++lv_zalloc(__unused void *ref, u_int items, u_int size)
++{
++	size_t n = (size_t)items * size + 16;
++	uint64_t *p = (uint64_t *)kalloc_data(n, Z_WAITOK | Z_ZERO);
++	if (p == NULL) {
++		return NULL;
++	}
++	p[0] = n;
++	return p + 2;
++}
++
++static void
++lv_zfree(__unused void *ref, void *ptr)
++{
++	uint64_t *p = (uint64_t *)ptr - 2;
++	kfree_data(p, (vm_size_t)p[0]);
++}
++
++static off_t
++lv_size_of(const char *path)
++{
++	vnode_t vp = NULLVP;
++	off_t len = -1;
++	if (vnode_lookup(path, 0, &vp, vfs_context_kernel()) == 0) {
++		if (vnode_size(vp, &len, vfs_context_kernel()) != 0) {
++			len = -1;
++		}
++		vnode_put(vp);
++	}
++	return len;
++}
++
++/* the files of a zip archive into a folder; a file already there with the entry's size is kept */
++static int
++lv_unzip(const char *zip, const char *dir)
++{
++	vfs_context_t ctx = vfs_context_kernel();
++	vnode_t vp = NULLVP;
++	off_t zlen = 0;
++	uint8_t *tail = NULL, *cd = NULL;
++	const size_t tail_max = 0x10000 + 22;
++	int err, made = 0, kept = 0;
++
++	err = vnode_open(zip, FREAD, 0, 0, &vp, ctx);
++	if (err) {
++		printf("LVBBFW %s: open %d\n", zip, err);
++		return err;
++	}
++	err = vnode_size(vp, &zlen, ctx);
++	size_t tlen = !err && zlen > 22 ? (size_t)MIN((off_t)tail_max, zlen) : 0;
++	uint32_t cd_off = 0, cd_size = 0, count = 0;
++	if (tlen != 0) {
++		tail = (uint8_t *)kalloc_data(tlen, Z_WAITOK);
++	}
++	if (tail != NULL && lv_pread(vp, zlen - (off_t)tlen, tail, tlen) == 0) {
++		for (size_t i = tlen - 22 + 1; i-- > 0;) {
++			if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 5 && tail[i + 3] == 6) {
++				memcpy(&count, tail + i + 10, 2);
++				memcpy(&cd_size, tail + i + 12, 4);
++				memcpy(&cd_off, tail + i + 16, 4);
++				break;
++			}
++		}
++	}
++	if (tail != NULL) {
++		kfree_data(tail, tlen);
++	}
++	if (count == 0 || cd_size == 0 || cd_size > (1u << 20) || (off_t)cd_off + cd_size > zlen) {
++		printf("LVBBFW %s: no zip directory (%lld bytes)\n", zip, (long long)zlen);
++		vnode_close(vp, FREAD, ctx);
++		return EINVAL;
++	}
++	cd = (uint8_t *)kalloc_data(cd_size, Z_WAITOK);
++	err = cd == NULL ? ENOMEM : lv_pread(vp, cd_off, cd, cd_size);
++	for (uint32_t i = 0, at = 0; !err && i < count && at + 46 <= cd_size; i++) {
++		const uint8_t *e = cd + at;
++		uint16_t method, nlen, xlen, clen;
++		uint32_t csize, usize, lho;
++		char path[320];
++
++		if (!(e[0] == 0x50 && e[1] == 0x4b && e[2] == 1 && e[3] == 2)) {
++			break;
++		}
++		memcpy(&method, e + 10, 2);
++		memcpy(&csize, e + 20, 4);
++		memcpy(&usize, e + 24, 4);
++		memcpy(&nlen, e + 28, 2);
++		memcpy(&xlen, e + 30, 2);
++		memcpy(&clen, e + 32, 2);
++		memcpy(&lho, e + 42, 4);
++		at += 46u + nlen + xlen + clen;
++		if (nlen == 0 || nlen > 64 || e[46 + nlen - 1] == '/' || memchr(e + 46, '/', nlen) != NULL) {
++			continue;                               /* folders and nested paths: none in a .bbfw */
++		}
++		snprintf(path, sizeof(path), "%s/%.*s", dir, (int)nlen, (const char *)(e + 46));
++		if (lv_size_of(path) == (off_t)usize) {
++			kept++;
++			continue;
++		}
++		uint8_t lh[30];
++		uint16_t lnl = 0, lxl = 0;
++		if (lv_pread(vp, lho, lh, sizeof(lh)) != 0 || !(lh[0] == 0x50 && lh[1] == 0x4b && lh[2] == 3 && lh[3] == 4)) {
++			printf("LVBBFW %s: bad local header\n", path);
++			continue;
++		}
++		memcpy(&lnl, lh + 26, 2);
++		memcpy(&lxl, lh + 28, 2);
++		uint8_t *in = csize != 0 ? (uint8_t *)kalloc_data(csize, Z_WAITOK) : NULL;
++		uint8_t *out = usize != 0 ? (uint8_t *)kalloc_data(usize, Z_WAITOK) : NULL;
++		int e2 = (csize != 0 && in == NULL) || (usize != 0 && out == NULL) ? ENOMEM : 0;
++		if (!e2 && csize != 0) {
++			e2 = lv_pread(vp, (off_t)lho + 30 + lnl + lxl, in, csize);
++		}
++		if (!e2 && method == 0 && csize == usize) {
++			if (usize != 0) {
++				memcpy(out, in, usize);
++			}
++		} else if (!e2 && method == 8 && usize != 0) {
++			z_stream zs;
++			bzero(&zs, sizeof(zs));
++			zs.zalloc = lv_zalloc;
++			zs.zfree = lv_zfree;
++			zs.next_in = in;
++			zs.avail_in = csize;
++			zs.next_out = out;
++			zs.avail_out = usize;
++			int zr = inflateInit2(&zs, -MAX_WBITS);
++			if (zr == Z_OK) {
++				zr = inflate(&zs, Z_FINISH);
++				(void)inflateEnd(&zs);
++			}
++			if (zr != Z_STREAM_END || zs.total_out != usize) {
++				printf("LVBBFW %s: inflate %d (%lu of %u)\n", path, zr, (unsigned long)zs.total_out, usize);
++				e2 = EIO;
++			}
++		} else if (!e2 && usize != 0) {
++			e2 = ENOTSUP;
++		}
++		if (!e2) {
++			vnode_t wv = NULLVP;
++			int resid = 0;
++			e2 = vnode_open(path, O_CREAT | O_TRUNC | FWRITE, 0644, 0, &wv, ctx);
++			if (!e2) {
++				if (usize != 0) {
++					e2 = vn_rdwr(UIO_WRITE, wv, (caddr_t)out, (int)usize, 0, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
++					    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++				}
++				if (!e2) {
++					e2 = VNOP_FSYNC(wv, MNT_WAIT, ctx);
++				}
++				vnode_close(wv, FWRITE, ctx);
++			}
++		}
++		printf("LVBBFW %s: %u bytes (method %u) -> %d\n", path, usize, method, e2);
++		made += e2 == 0;
++		if (in != NULL) {
++			kfree_data(in, csize);
++		}
++		if (out != NULL) {
++			kfree_data(out, usize);
++		}
++	}
++	if (cd != NULL) {
++		kfree_data(cd, cd_size);
++	}
++	vnode_close(vp, FREAD, ctx);
++	printf("LVBBFW %s -> %s: %u entries, %d written, %d already there\n", zip, dir, count, made, kept);
++	return err;
++}
++
++static void
++lv_bbfw_install(void)
++{
++	uint32_t abp = 0;
++	DTEntry chosen;
++	void const *hash = NULL;
++	unsigned int hlen = 0;
++	char dir[256];
++	int n;
++
++	if (!PE_parse_boot_argn("abp", &abp, sizeof(abp)) || abp == 0) {
++		return;
++	}
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "boot-manifest-hash", &hash, &hlen) != kSuccess || hlen == 0 || hlen > 64) {
++		printf("LVBBFW no boot-manifest-hash in the device tree\n");
++		return;
++	}
++	n = snprintf(dir, sizeof(dir), "/private/preboot/");
++	for (unsigned int i = 0; i < hlen; i++) {
++		n += snprintf(dir + n, sizeof(dir) - (size_t)n, "%02X", ((const uint8_t *)hash)[i]);
++	}
++	snprintf(dir + n, sizeof(dir) - (size_t)n, "/usr/local/standalone/firmware/Baseband/Mav17");
++	if (lv_mkdirs(dir) == 0) {
++		(void)lv_unzip("/usr/standalone/update/Mav17.Release.bbfw", dir);
++	}
++}
++
+ void
+ lavender_userland_install(void)
+ {
++	lv_bbfw_install();
+ 	static const char *const libs[] = { "libOSMesa.8.dylib", "libtopaz-gl.dylib", "libtopaz-inject.dylib" };
+ 	const char *real = "/usr/sbin/backboardd", *bbd = "/usr/libexec/backboardd";
+ 	uint32_t un = 0, size = 0;
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 90e68bb..7273ad7 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -14579,3 +14579,16 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
+ 
+ 	return error;
+ }
++
++/* lavender (xnu/src/mk_bbfw.py): mkdir of a kernel path, for the installer in bsd/dev/topaz_fw.c */
++int sweet_mkdir(const char *path, int mode);
++
++int
++sweet_mkdir(const char *path, int mode)
++{
++	struct vnode_attr va;
++
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, (mode_t)mode);
++	return mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);
++}
