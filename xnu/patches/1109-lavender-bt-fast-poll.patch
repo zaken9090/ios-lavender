@@ -1,0 +1,41 @@
+lavender: Bluetooth UART - fast polling after traffic (generator: xnu/src/mk_bt25.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 0d672d7..b382373 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -825,7 +825,7 @@ bt_serve(void)
+ 	}
+ 	bt_ready = true;
+ 	static uint8_t pkt[4 + 65536];
+-	uint32_t have = 0, idle_ms = 0, overruns = 0;
++	uint32_t have = 0, idle_ms = 0, idle_us = 20000, overruns = 0;
+ 	for (;;) {
+ 		uint32_t sr = rd(uart, U_SR);
+ 		if (sr & (1u << 4)) {
+@@ -836,7 +836,16 @@ bt_serve(void)
+ 		}
+ 		bt_rx_poll();
+ 		if (rx_head == rx_tail) {
+-			IOSleep(1);
++			/* idle_ms counts 20 us steps for the first 20 ms after traffic (idle_us), then 1 ms sleeps */
++			if (idle_us < 20000) {
++				IODelay(20);
++				idle_us += 20;
++				if (idle_us % 1000 != 0) {
++					continue;
++				}
++			} else {
++				IOSleep(1);
++			}
+ 			idle_ms++;
+ 			if (idle_ms == 5) {
+ 				wr(uart, U_CR, CR_FORCE_STALE);         /* the tail of this transfer out of the FIFO */
+@@ -851,6 +860,7 @@ bt_serve(void)
+ 			continue;
+ 		}
+ 		idle_ms = 0;
++		idle_us = 0;
+ 		while (rx_head != rx_tail) {
+ 			pkt[have++] = rx_ring[rx_head++ % sizeof(rx_ring)];
+ 			uint32_t need = 0;
