@@ -3,7 +3,8 @@
 The user noticed the phone is warmer than before; nothing watched the temperature
 (thermalmonitord runs without sensors, PLAN-DRIVERS item 16). Stock DT: tsens@10ad000
 (qcom,sdm660-tsens, TSENS v2 as msm8998), 14 sensors. TSENS v2 TM: sensor n status at
-0x10AD000 + 0xA0 + 4*n, bits 11:0 the last temperature in tenths of a degree (signed),
+0x10AE000 (TM, the second page of the DT block 0x10AD000+0x2000; the first page, SROT, is
+0x10AD000 and may not be readable from EL1 - the first project read 0x10AE000) + 0xA0 + 4*n, bits 11:0 the last temperature in tenths of a degree (signed),
 bit 21 valid.
 
 Now a kernel thread (started with the modem-up hook, before Bluetooth/audio) reads the 14
@@ -25,14 +26,14 @@ def patch(path, old, new):
 
 
 open(f'{tree}/iokit/Kernel/arm/LavenderThermal.cpp', 'w', newline='\n').write(r'''/*
- * lavender: SoC temperature log (xnu/src/mk_thermal1.py). TSENS v2 at 0x10AD000, read only.
+ * lavender: SoC temperature log (xnu/src/mk_thermal1.py). TSENS v2 TM at 0x10AE000, read only.
  */
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 
 #define LOG(fmt, ...)       IOLog("temp: " fmt "\n", ##__VA_ARGS__)
-#define TSENS_TM_PA         0x010AD000ull
+#define TSENS_TM_PA         0x010AE000ull       /* TM page of the DT block 0x10ad000+0x2000 (first project: 0x10ae000) */
 #define TSENS_SENSORS       14
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);

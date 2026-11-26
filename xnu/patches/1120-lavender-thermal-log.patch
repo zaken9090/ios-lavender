@@ -2,19 +2,19 @@ lavender: SoC temperature log from TSENS (generator: xnu/src/mk_thermal1.py)
 
 diff --git a/iokit/Kernel/arm/LavenderThermal.cpp b/iokit/Kernel/arm/LavenderThermal.cpp
 new file mode 100644
-index 0000000..862e206
+index 0000000..725babd
 --- /dev/null
 +++ b/iokit/Kernel/arm/LavenderThermal.cpp
 @@ -0,0 +1,71 @@
 +/*
-+ * lavender: SoC temperature log (xnu/src/mk_thermal1.py). TSENS v2 at 0x10AD000, read only.
++ * lavender: SoC temperature log (xnu/src/mk_thermal1.py). TSENS v2 TM at 0x10AE000, read only.
 + */
 +#include <IOKit/IOLib.h>
 +#include <kern/thread.h>
 +#include <pexpert/pexpert.h>
 +
 +#define LOG(fmt, ...)       IOLog("temp: " fmt "\n", ##__VA_ARGS__)
-+#define TSENS_TM_PA         0x010AD000ull
++#define TSENS_TM_PA         0x010AE000ull       /* TM page of the DT block 0x10ad000+0x2000 (first project: 0x10ae000) */
 +#define TSENS_SENSORS       14
 +
 +extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
