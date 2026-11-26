@@ -1,0 +1,398 @@
+lavender: QMUX <-> QRTR bridge between the baseband PCI pipes qmux1/qmux2 and the modem, with the CTL service (generator: xnu/src/mk_qmux.py)
+
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index d805ad8..08e6322 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -239,6 +239,8 @@ public:
+ OSDefineMetaClassAndStructors(AppleBasebandPCIInterface, IOService);
+ 
+ static IOLock *lv_abp_lock;
++extern "C" bool lv_qmux_tx(unsigned chan, const uint8_t *frame, uint32_t len);                 /* TopazModem.cpp */
++extern "C" void lv_qmux_set_rx(void (*fn)(unsigned chan, const uint8_t *frame, uint32_t len));
+ static IOReturn lv_abp_async_done(OSAsyncReference64 ref, IOReturn result, uint64_t *args, uint32_t count);
+ static IOService *lv_abp_provider, *lv_abp_bb;
+ static AppleBasebandPCIControl *lv_abp_ctl;
+@@ -317,6 +319,16 @@ AppleBasebandPCIInterface::dropRead(void)
+ 	}
+ }
+ 
++/* a QMUX frame from the modem bridge for pipe chan (0 qmux1, 1 qmux2) */
++static void
++lv_abp_qmux_rx(unsigned chan, const uint8_t *frame, uint32_t len)
++{
++	AppleBasebandPCIInterface *itf = chan < 2 ? lv_abp_if[4 + chan] : NULL;
++	if (itf != NULL) {
++		itf->rx(frame, len);
++	}
++}
++
+ static void
+ lv_abp_publish(unsigned i)
+ {
+@@ -485,8 +497,14 @@ lv_abp_fetch(char *out, size_t outsz, uint64_t va, uint64_t len, const void *kbu
+ void
+ SweetABPUserClient::modemSide(const uint8_t *data, uint32_t len)
+ {
++	if (fItf != NULL && (fItf->fIndex == 4 || fItf->fIndex == 5)) {
++		if (!lv_qmux_tx(fItf->fIndex - 4, data, len)) {
++			IOLog("LV ABP %s: QMUX frame of %u bytes not taken by the modem bridge\n", fWho, len);
++		}
++		return;
++	}
+ 	if (fItf == NULL || fItf->fIndex != 1 || len < 8) {
+-		return;                                 /* only the Sahara endpoint answers so far */
++		return;                                 /* besides QMUX only the Sahara endpoint answers so far */
+ 	}
+ 	uint32_t cmd, w[4] = { 0, 0, 0, 0 };
+ 	memcpy(&cmd, data, 4);
+@@ -523,7 +541,8 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 	bool async = args->asyncWakePort != MACH_PORT_NULL;
+ 	uint64_t in[4] = { 0, 0, 0, 0 };
+ 	char name[32], hex[128];
+-	uint8_t buf[512];
++	const uint32_t bufsz = 0x4000;                 /* a whole QMUX frame for the bridge */
++	uint8_t *buf = selector == 2 ? (uint8_t *)IOMallocData(bufsz) : NULL;
+ 	uint32_t got = 0;
+ 	const char *what = "?";
+ 	uint64_t done[2] = { 0, 0 };
+@@ -549,13 +568,13 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 		case 2:
+ 			what = "write";
+ 			if (async) {
+-				got = lv_abp_fetch(hex, sizeof(hex), in[0], in[1], NULL, buf, sizeof(buf));
++				got = buf != NULL ? lv_abp_fetch(hex, sizeof(hex), in[0], in[1], NULL, buf, bufsz) : 0;
+ 				done[0] = in[1];
+ 				complete = 1;
+-			} else if (args->structureInput != NULL) {
+-				got = lv_abp_fetch(hex, sizeof(hex), 0, args->structureInputSize, args->structureInput, buf, sizeof(buf));
+-			} else if (args->structureInputDescriptor != NULL) {
+-				got = (uint32_t)args->structureInputDescriptor->readBytes(0, buf, MIN(sizeof(buf),
++			} else if (args->structureInput != NULL && buf != NULL) {
++				got = lv_abp_fetch(hex, sizeof(hex), 0, args->structureInputSize, args->structureInput, buf, bufsz);
++			} else if (args->structureInputDescriptor != NULL && buf != NULL) {
++				got = (uint32_t)args->structureInputDescriptor->readBytes(0, buf, MIN((size_t)bufsz,
+ 				    (size_t)args->structureInputDescriptor->getLength()));
+ 				snprintf(hex, sizeof(hex), "(%llu bytes by descriptor)", (uint64_t)args->structureInputDescriptor->getLength());
+ 			}
+@@ -659,6 +678,9 @@ SweetABPUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments
+ 	if (selector == 2 && got != 0) {
+ 		modemSide(buf, got);
+ 	}
++	if (buf != NULL) {
++		IOFreeData(buf, bufsz);
++	}
+ 	if (next_sahara && (lv_abp_hold == 0 || lv_abp_hold > LV_ABP_ROM)) {
+ 		lv_abp_set_stage(LV_ABP_SAHARA);
+ 	}
+@@ -698,6 +720,7 @@ IOWatchdog::start(IOService *provider)
+ 		(void)PE_parse_boot_argn("abp_serial", &lv_abp_serial, sizeof(lv_abp_serial));
+ 		(void)PE_parse_boot_argn("abp_hold", &lv_abp_hold, sizeof(lv_abp_hold));
+ 		lv_abp_lock = IOLockAlloc();
++		lv_qmux_set_rx(lv_abp_qmux_rx);
+ 		lv_abp_provider = provider;
+ 		lv_abp_bb = bb;
+ 		lv_abp_ctl = OSTypeAlloc(AppleBasebandPCIControl);
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index dbdb40c..21b4361 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -1057,6 +1057,8 @@ glink_start(struct smem_part_hdr *part)
+ 	return true;
+ }
+ 
++static void qmux_pump(void);
++
+ /* one pass, every millisecond from the watch loop */
+ static void
+ glink_poll(struct smem_part_hdr *part, unsigned ms)
+@@ -1073,6 +1075,9 @@ glink_poll(struct smem_part_hdr *part, unsigned ms)
+ 	for (int i = 0; i < 64 && g_rx != NULL && rx_one(); i++) {
+ 	}
+ 	txq_pump();
++	if (chan_up()) {
++		qmux_pump();
++	}
+ 	if (chan_up() && !g_intents_sent) {
+ 		advertise_intents(OUR_INTENTS, OUR_INTENT_SIZE);
+ 		g_intents_sent = true;
+@@ -5002,9 +5007,271 @@ svc_announce(void)
+ 	LOG("t=%u ms: announced pd-mapper 0x40, tftp 0x1000, rmtfs 0x0e", g_ms);
+ }
+ 
++/* ---------------------------------------------------------------- QMUX bridge (xnu/src/mk_qmux.py) */
++#define PORT_QMUX           0x6000
++#define QMUX_CLIENTS        96
++#define QMUX_RING           64
++
++static struct { bool used; uint8_t chan, svc, cid; uint32_t node, port; } qmux_cl[QMUX_CLIENTS];
++static struct { uint8_t *data; uint32_t len; uint8_t chan; } qmux_ring[QMUX_RING];
++static unsigned qmux_head, qmux_tail, qmux_logged;
++static IOLock *qmux_lock;
++static void (*qmux_rx_fn)(unsigned chan, const uint8_t *frame, uint32_t len);
++
++extern "C" void
++lv_qmux_set_rx(void (*fn)(unsigned chan, const uint8_t *frame, uint32_t len))
++{
++	qmux_rx_fn = fn;
++}
++
++/* a QMUX frame written by the client of pipe chan (0 = qmux1, 1 = qmux2); any thread */
++extern "C" bool
++lv_qmux_tx(unsigned chan, const uint8_t *frame, uint32_t len)
++{
++	bool ok = false;
++	if (qmux_lock == NULL || len == 0 || len > 0x4000) {
++		return false;
++	}
++	uint8_t *copy = (uint8_t *)IOMallocData(len);
++	if (copy == NULL) {
++		return false;
++	}
++	memcpy(copy, frame, len);
++	IOLockLock(qmux_lock);
++	if (qmux_tail - qmux_head < QMUX_RING) {
++		qmux_ring[qmux_tail % QMUX_RING].data = copy;
++		qmux_ring[qmux_tail % QMUX_RING].len = len;
++		qmux_ring[qmux_tail % QMUX_RING].chan = (uint8_t)chan;
++		qmux_tail++;
++		ok = true;
++	}
++	IOLockUnlock(qmux_lock);
++	if (!ok) {
++		IOFreeData(copy, len);
++	}
++	return ok;
++}
++
++static void
++qmux_deliver(unsigned chan, uint8_t svc, uint8_t cid, const uint8_t *sdu, uint32_t len)
++{
++	uint8_t *f = (uint8_t *)IOMallocData(6 + len);
++	if (f == NULL) {
++		return;
++	}
++	uint16_t flen = (uint16_t)(5 + len);
++	f[0] = 1;
++	memcpy(f + 1, &flen, 2);
++	f[3] = 0x80;                                    /* from the service */
++	f[4] = svc;
++	f[5] = cid;
++	memcpy(f + 6, sdu, len);
++	if (qmux_logged++ < 120) {
++		uint16_t msg = 0;
++		memcpy(&msg, sdu + (svc == 0 ? 2 : 3), len >= 5 ? 2 : 0);
++		LOG("qmux%u <- svc %#x client %u msg %#x, %u bytes%s", chan + 1, svc, cid, msg, len,
++		    len > 0 && (sdu[0] & (svc == 0 ? 2 : 4)) ? " (indication)" : "");
++	}
++	if (qmux_rx_fn != NULL) {
++		qmux_rx_fn(chan, f, 6 + len);
++	}
++	IOFreeData(f, 6 + len);
++}
++
++/* a CTL response: result TLV 2, then one optional TLV */
++static void
++qmux_ctl_reply(unsigned chan, uint8_t txn, uint16_t msg, uint16_t err, uint8_t tlv, const void *val, uint16_t vlen)
++{
++	uint8_t s[6 + 7 + 3 + 600];
++	uint16_t n = 0, body = (uint16_t)(7 + (tlv != 0 ? 3 + vlen : 0));
++	if (vlen > 600) {
++		return;
++	}
++	s[n++] = 1;                                     /* response */
++	s[n++] = txn;
++	memcpy(s + n, &msg, 2); n += 2;
++	memcpy(s + n, &body, 2); n += 2;
++	s[n++] = 2; s[n++] = 4; s[n++] = 0;             /* result: {u16 result, u16 error} */
++	uint16_t res = err != 0 ? 1 : 0;
++	memcpy(s + n, &res, 2); n += 2;
++	memcpy(s + n, &err, 2); n += 2;
++	if (tlv != 0) {
++		s[n++] = tlv;
++		memcpy(s + n, &vlen, 2); n += 2;
++		memcpy(s + n, val, vlen); n += vlen;
++	}
++	qmux_deliver(chan, 0, 0, s, n);
++}
++
++static void
++qmux_ctl(unsigned chan, const uint8_t *sdu, uint32_t len)
++{
++	if (len < 6) {
++		return;
++	}
++	uint8_t txn = sdu[1];
++	uint16_t msg, l = 0;
++	memcpy(&msg, sdu + 2, 2);
++	const uint8_t *t1 = NULL;
++	for (uint32_t at = 6; at + 3 <= len;) {             /* TLV 1 of the request */
++		uint16_t tl;
++		memcpy(&tl, sdu + at + 1, 2);
++		if (sdu[at] == 1 && at + 3 + tl <= len) {
++			t1 = sdu + at + 3;
++			l = tl;
++		}
++		at += 3u + tl;
++	}
++	switch (msg) {
++	case 0x0021: {                                  /* GET_VERSION_INFO: {count, {svc, major, minor} ...} */
++		uint8_t v[1 + 5 * 64];
++		uint8_t count = 0;
++		for (unsigned i = 0; i < q_srv_count && count < 64; i++) {
++			bool dup = false;
++			if (q_srv[i].svc == 0 || q_srv[i].svc > 0xff) {
++				continue;
++			}
++			for (unsigned j = 0; j < count; j++) {
++				dup |= v[1 + 5 * j] == (uint8_t)q_srv[i].svc;
++			}
++			if (dup) {
++				continue;
++			}
++			uint16_t major = (uint16_t)(q_srv[i].inst & 0xff), minor = 0;
++			v[1 + 5 * count] = (uint8_t)q_srv[i].svc;
++			memcpy(v + 2 + 5 * count, &major, 2);
++			memcpy(v + 4 + 5 * count, &minor, 2);
++			count++;
++		}
++		v[0] = count;
++		qmux_ctl_reply(chan, txn, msg, 0, 1, v, (uint16_t)(1 + 5 * count));
++		break;
++	}
++	case 0x0022: {                                  /* GET_CLIENT_ID: service type -> {service, client id} */
++		uint8_t svc = t1 != NULL && l >= 1 ? t1[0] : 0, out[2];
++		int slot = -1, srv = -1;
++		uint8_t cid = 1;
++		for (unsigned i = 0; i < q_srv_count; i++) {
++			if (q_srv[i].svc == svc) {
++				srv = (int)i;
++				break;
++			}
++		}
++		for (unsigned i = 0; i < QMUX_CLIENTS; i++) {
++			if (qmux_cl[i].used && qmux_cl[i].svc == svc && qmux_cl[i].chan == chan && qmux_cl[i].cid >= cid) {
++				cid = (uint8_t)(qmux_cl[i].cid + 1);
++			}
++			if (!qmux_cl[i].used && slot < 0) {
++				slot = (int)i;
++			}
++		}
++		if (srv < 0 || slot < 0 || svc == 0) {
++			LOG("qmux%u: client id for service %#x refused (%s)", chan + 1, svc, srv < 0 ? "the modem has no such service" : "table full");
++			qmux_ctl_reply(chan, txn, msg, srv < 0 ? 0x1F : 0x05, 0, NULL, 0);
++			break;
++		}
++		qmux_cl[slot].used = true;
++		qmux_cl[slot].chan = (uint8_t)chan;
++		qmux_cl[slot].svc = svc;
++		qmux_cl[slot].cid = cid;
++		qmux_cl[slot].node = q_srv[srv].node;
++		qmux_cl[slot].port = q_srv[srv].port;
++		out[0] = svc;
++		out[1] = cid;
++		LOG("qmux%u: service %#x %s client %u = our port %#x -> modem %u:%#x", chan + 1, svc, svc_name(svc), cid, PORT_QMUX + slot,
++		    q_srv[srv].node, q_srv[srv].port);
++		qmux_ctl_reply(chan, txn, msg, 0, 1, out, 2);
++		break;
++	}
++	case 0x0023:                                    /* RELEASE_CLIENT_ID */
++		for (unsigned i = 0; i < QMUX_CLIENTS && t1 != NULL && l >= 2; i++) {
++			if (qmux_cl[i].used && qmux_cl[i].chan == chan && qmux_cl[i].svc == t1[0] && qmux_cl[i].cid == t1[1]) {
++				struct qrtr_ctrl c = { QRTR_TYPE_DEL_CLIENT, QRTR_NODE_APPS, PORT_QMUX + i, 0, 0 };
++				qrtr_send(QRTR_TYPE_DEL_CLIENT, QRTR_PORT_CTRL, q_modem_node, QRTR_PORT_CTRL, &c, sizeof(c));
++				qmux_cl[i].used = false;
++			}
++		}
++		qmux_ctl_reply(chan, txn, msg, 0, 1, t1 != NULL ? t1 : (const uint8_t *)"\0\0", 2);
++		break;
++	case 0x0020: {                                  /* SET_INSTANCE_ID -> link id */
++		uint16_t link = 0;
++		qmux_ctl_reply(chan, txn, msg, 0, 1, &link, 2);
++		break;
++	}
++	default:                                        /* SET_DATA_FORMAT, SYNC, power save, ...: accepted */
++		qmux_ctl_reply(chan, txn, msg, 0, 0, NULL, 0);
++		break;
++	}
++}
++
++/* frames from the pipes, on the modem thread */
++static void
++qmux_pump(void)
++{
++	for (int n = 0; n < 32; n++) {
++		uint8_t *f = NULL;
++		uint32_t len = 0;
++		unsigned chan = 0;
++		IOLockLock(qmux_lock);
++		if (qmux_head != qmux_tail) {
++			f = qmux_ring[qmux_head % QMUX_RING].data;
++			len = qmux_ring[qmux_head % QMUX_RING].len;
++			chan = qmux_ring[qmux_head % QMUX_RING].chan;
++			qmux_head++;
++		}
++		IOLockUnlock(qmux_lock);
++		if (f == NULL) {
++			return;
++		}
++		for (uint32_t at = 0; at + 6 <= len;) {         /* one or more QMUX frames */
++			uint16_t flen;
++			memcpy(&flen, f + at + 1, 2);
++			if (f[at] != 1 || flen < 5 || at + 1 + flen > len) {
++				LOG("qmux%u: not a QMUX frame at %u of %u bytes: %02x %02x %02x %02x %02x %02x", chan + 1, at, len, f[at], f[at + 1],
++				    f[at + 2], f[at + 3], f[at + 4], f[at + 5]);
++				break;
++			}
++			uint8_t svc = f[at + 4], cid = f[at + 5];
++			const uint8_t *sdu = f + at + 6;
++			uint32_t slen = flen - 5u;
++			if (qmux_logged++ < 120) {
++				uint16_t msg = 0;
++				if (slen >= 5) {
++					memcpy(&msg, sdu + (svc == 0 ? 2 : 3), 2);
++				}
++				LOG("qmux%u -> svc %#x client %u msg %#x, %u bytes", chan + 1, svc, cid, msg, slen);
++			}
++			if (svc == 0) {
++				qmux_ctl(chan, sdu, slen);
++			} else {
++				bool sent = false;
++				for (unsigned i = 0; i < QMUX_CLIENTS; i++) {
++					if (qmux_cl[i].used && qmux_cl[i].chan == chan && qmux_cl[i].svc == svc && qmux_cl[i].cid == cid) {
++						qrtr_send(QRTR_TYPE_DATA, PORT_QMUX + i, qmux_cl[i].node, qmux_cl[i].port, sdu, slen);
++						sent = true;
++						break;
++					}
++				}
++				if (!sent) {
++					LOG("qmux%u: no client %u of service %#x", chan + 1, cid, svc);
++				}
++			}
++			at += 1u + flen;
++		}
++		IOFreeData(f, len);
++	}
++}
++
+ static bool
+ svc_rx(uint32_t src_node, uint32_t src_port, uint32_t dst_port, const uint8_t *data, uint32_t len)
+ {
++	if (dst_port >= PORT_QMUX && dst_port < PORT_QMUX + QMUX_CLIENTS) {
++		unsigned i = dst_port - PORT_QMUX;
++		if (qmux_cl[i].used) {
++			qmux_deliver(qmux_cl[i].chan, qmux_cl[i].svc, qmux_cl[i].cid, data, len);
++		}
++		return true;
++	}
+ 	if (dst_port == PORT_TFTP) {
+ 		if (len >= 2 && (data[1] == OP_RRQ || data[1] == OP_WRQ)) {
+ 			tftp_request(src_node, src_port, data, len);
+@@ -5742,6 +6009,7 @@ topaz_soc_map(void)
+ 	}
+ 	state = -1;
+ 	soc_lock = IOLockAlloc();
++	qmux_lock = IOLockAlloc();
+ 	(void)PE_parse_boot_argn("modem_part", fw_part, sizeof(fw_part));
+ 	uint8_t probe[16];
+ 	int err = EAGAIN;
