@@ -1,0 +1,49 @@
+lavender: WCN3990 supplies (PM660 L5/L9/L6/L19) and RF_CLK1 voted on through the RPM before the WLFW handshake (generator: xnu/src/mk_wlanpower.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 253385c..db2d1f9 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -2213,6 +2213,34 @@ w_on_msa_info(const uint8_t *d, uint32_t len)
+ 
+ static unsigned w_arrivals, w_cap_tries, w_cap_retry_ms;
+ 
++extern "C" bool topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
++
++/* lavender: the WCN3990's supplies and reference clock, as Android's icnss_hw_power_on() */
++static void
++wlan_power_on(void)
++{
++	static bool done;
++	static const struct { const char *name; uint32_t ldo, uv; } rail[] = {
++		{ "vdd-0.8-cx-mx (L5)", 5, 848000 }, { "vdd-1.8-xo (L9)", 9, 1800000 },
++		{ "vdd-1.3-rfa (L6)", 6, 1304000 }, { "vdd-3.3-ch0 (L19)", 19, 3312000 },
++	};
++	uint32_t on = 1;
++	(void)PE_parse_boot_argn("modem_wlpwr", &on, sizeof(on));
++	if (done || on == 0) {
++		return;
++	}
++	done = true;
++	for (unsigned i = 0; i < sizeof(rail) / sizeof(rail[0]); i++) {
++		bool uv = topaz_rpm_write(0, 0x616f646cu, rail[i].ldo, 0x00007675u, rail[i].uv);
++		bool en = topaz_rpm_write(0, 0x616f646cu, rail[i].ldo, 0x6e657773u, 1);
++		LOG("wlan power: %s %u uV: voltage %s, enable %s", rail[i].name, rail[i].uv, uv ? "acked" : "FAILED", en ? "acked" : "FAILED");
++		IODelay(500);
++	}
++	bool ck = topaz_rpm_write(0, 0x616b6c63u, 4, 0x6e657773u, 1);
++	LOG("wlan power: RF_CLK1 (clka 4): %s", ck ? "acked" : "FAILED");
++	IOSleep(5);
++}
++
+ static void
+ wlfw_arrive(uint32_t node, uint32_t port)
+ {
+@@ -2225,6 +2253,7 @@ wlfw_arrive(uint32_t node, uint32_t port)
+ 		LOG("WLFW left alone (modem_wlfw=0)");
+ 		return;
+ 	}
++	wlan_power_on();
+ 	if (w_arrivals++ != 0) {
+ 		/* the WLAN PD restarted (new server port): start the handshake again */
+ 		LOG("t=%u ms: WLFW back on port %x (restart %u, last step: %s): handshake again", g_ms, port, w_arrivals - 1, w_step);
