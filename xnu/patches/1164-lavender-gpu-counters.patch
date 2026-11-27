@@ -1,0 +1,104 @@
+lavender: LVG line - the GPU's own performance counters every second (generator: xnu/src/mk_gpucounters.py)
+
+diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
+index e27a034..aa39a52 100644
+--- a/iokit/Kernel/arm/LavenderMetrics.cpp
++++ b/iokit/Kernel/arm/LavenderMetrics.cpp
+@@ -48,6 +48,7 @@ extern unsigned int lvm_level __asm("_memorystatus_level");
+ }
+ 
+ /* TopazAdreno.cpp */
++extern "C" bool redwood_gpu_counters(uint64_t *out, uint32_t count);
+ extern "C" bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
+ 
+ static volatile uint32_t *tm, *pll_gold, *pll_silver, *gold_rcg, *apcs_common;
+@@ -372,6 +373,26 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 		if (ns != 0) {
+ 			IOLog("%s\n", line);
+ 		}
++		{
++			/* the GPU's own counters, as the change over the period (xnu/src/mk_gpucounters.py) */
++			static uint64_t was[14];
++			static bool had;
++			uint64_t c[14], d[14];
++			if (redwood_gpu_counters(c, 14)) {
++				for (int i = 0; i < 14; i++) {
++					d[i] = c[i] >= was[i] ? c[i] - was[i] : 0;      /* (a GPU reset starts them again) */
++					was[i] = c[i];
++				}
++				if (had && ns != 0) {
++					IOLog("LVG %llu ms: tpbeat %llu spbeat %llu latcyc %llu latn %llu | tpbusy %llu tpreq %llu tpmiss %llu | "
++					    "spalu %llu spbusy %llu spidle %llu | rbbusy %llu rbpass %llu rbstall %llu rbfifo %llu\n", ns / 1000000,
++					    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13]);
++				}
++				had = true;
++			} else {
++				had = false;
++			}
++		}
+ 		if (top_n != 0) {
+ 			proc_line(ns);
+ 		}
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 1535721..57c3e45 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -54,6 +54,7 @@ void redwood_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t
+ void redwood_gpu_report(const char *why);
+ bool redwood_gpu_recover(void);
+ bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
++bool redwood_gpu_counters(uint64_t *out, uint32_t count);
+ void redwood_gpu_stop(void);
+ void redwood_tl(const char *format, ...) __printflike(1, 2);
+ uint32_t gpu_log;
+@@ -1266,6 +1267,25 @@ redwood_gpu_report(const char *why)
+  */
+ static uint32_t lv_gpu_recovered, lv_gpu_recover_failed;
+ 
++/*
++ * lavender (mk_gpucounters.py): the counters of the LVG line, in its order: UCHE 0-3, TP 0-2, SP 0-2,
++ * RB 0-3 (RBBM_PERFCTR_*_LO, the high word follows each).
++ */
++bool
++redwood_gpu_counters(uint64_t *out, uint32_t count)
++{
++	static const uint16_t reg[14] = { 0x408, 0x40a, 0x40c, 0x40e, 0x418, 0x41a, 0x41c, 0x428, 0x42a, 0x42c, 0x440, 0x442, 0x444, 0x446 };
++
++	if (!ready) {
++		return false;
++	}
++	for (uint32_t i = 0; i < count && i < 14; i++) {
++		uint32_t lo = gpu_rd(reg[i]);
++		out[i] = ((uint64_t)gpu_rd(reg[i] + 1u) << 32) | lo;
++	}
++	return true;
++}
++
+ /*
+  * lavender (mk_metrics.py): busy cycles (RBBM_PERFCTR_RBBM_0: countable 6 = RBBM_STATUS masked, set in
+  * a5_hw_init as Linux does for devfreq), the core clock, submissions and recoveries so far.
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index 853c0ec..ea1186f 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -934,6 +934,20 @@ a5_hw_init(void)
+ 	g_w(A5_CP_PERFCTR_CP_SEL_0, 0);                 /* PERF_CP_ALWAYS_COUNT */
+ 	g_w(A5_RBBM_PERFCTR_RBBM_SEL_0, 6);
+ 	g_w(A5_SP_PERFCTR_SP_SEL_0, 1);                 /* PERF_SP_ALU_WORKING_CYCLES */
++	/* lavender: counters of the LVG line (xnu/src/mk_gpucounters.py): UCHE, TP, SP, RB select registers */
++	g_w(0x0ea0, 4);                                 /* UCHE 0: VBIF read beats, textures */
++	g_w(0x0ea1, 8);                                 /* UCHE 1: VBIF read beats, shader processor */
++	g_w(0x0ea2, 2);                                 /* UCHE 2: VBIF latency cycles */
++	g_w(0x0ea3, 3);                                 /* UCHE 3: VBIF latency samples */
++	g_w(0x0f10, 0);                                 /* TP 0: busy cycles */
++	g_w(0x0f11, 6);                                 /* TP 1: L1 cache line requests */
++	g_w(0x0f12, 7);                                 /* TP 2: L1 cache line misses */
++	g_w(0x0ed1, 0);                                 /* SP 1: busy cycles */
++	g_w(0x0ed2, 22);                                /* SP 2: wave idle cycles */
++	g_w(0x0cd0, 0);                                 /* RB 0: busy cycles */
++	g_w(0x0cd1, 17);                                /* RB 1: pixels passed */
++	g_w(0x0cd2, 1);                                 /* RB 2: stall cycles, CCU */
++	g_w(0x0cd3, 3);                                 /* RB 3: stall cycles, FIFO 0 full */
+ 	g_w(A5_UCHE_CACHE_WAYS, 0x02);
+ 	g_w64(A5_UCHE_TRAP_BASE, 0x0001ffffffff0000ull);
+ 	g_w64(A5_UCHE_WRITE_THRU_BASE, 0x0001ffffffff0000ull);

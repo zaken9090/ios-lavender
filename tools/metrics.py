@@ -11,6 +11,9 @@ CPU, and with --rows every second. --csv writes one row a second for a spreadshe
   free/wired/act/inact/comp  memory, MB        lvl     memorystatus level
   mv/ma   battery voltage and current (+ = discharging)
   fps/late/wait  from the SWEET FPS line of the same second (frames, late frames, GPU wait us a frame)
+  g_*     the GPU's own counters (LVG line): g_lat = cycles a memory request waits, g_misspct = texture
+          cache misses, g_alupct = share of the shader's busy time it computes, g_kbeat_f / g_kpix_f =
+          thousand memory beats read / thousand pixels passed per frame
 """
 import argparse
 import csv
@@ -25,6 +28,7 @@ LVM = re.compile(
 LVM_KEYS = ("ms", "cpu0", "cpu1", "cpu2", "cpu3", "run", "gold", "t0", "t1", "t2", "t3", "tgpu", "tmax",
             "gpu", "gpumhz", "sub", "rec", "recfail", "free", "wired", "act", "inact", "comp", "lvl", "mv", "ma")
 LVP = re.compile(rb"LVP (\d+) ms: all (\d+) \|(.*)")
+LVG = re.compile(rb"LVG (\d+) ms: (.*)")
 LVK = re.compile(rb"LVK khz (\d+) (\d+) (\d+) (\d+)")
 FPS = re.compile(rb"SWEET FPS: (\d+) frames in (\d+) ms, longest gap (\d+) ms, (\d+) late;.*?GPU waited (\d+) us a frame")
 
@@ -53,6 +57,26 @@ def parse(data):
             if rows:
                 rows[-1]["all"] = int(m.group(2))
                 rows[-1]["top"] = top
+            continue
+        m = LVG.search(line)
+        if m:
+            # the GPU's own counters (xnu 1164), change over the second: g_<name>
+            words = [w for w in m.group(2).decode("ascii", "replace").split() if w != "|"]
+            if rows:
+                for name, val in zip(words[0::2], words[1::2]):
+                    if val.isdigit():
+                        rows[-1]["g_" + name] = int(val)
+                g = rows[-1]
+                frames = g.get("fps", 0) * g.get("ms", 1000) / 1000.0
+                if g.get("g_latn"):
+                    g["g_lat"] = round(g["g_latcyc"] / g["g_latn"], 1)            # cycles a memory request
+                if g.get("g_tpreq"):
+                    g["g_misspct"] = round(100.0 * g["g_tpmiss"] / g["g_tpreq"], 1)
+                if g.get("g_spbusy"):
+                    g["g_alupct"] = round(100.0 * g.get("g_spalu", 0) / g["g_spbusy"], 1)
+                if frames >= 3:
+                    g["g_kbeat_f"] = round((g.get("g_tpbeat", 0) + g.get("g_spbeat", 0)) / frames / 1000)
+                    g["g_kpix_f"] = round(g.get("g_rbpass", 0) / frames / 1000)
             continue
         m = LVM.search(line)
         if m:
@@ -100,7 +124,8 @@ def main():
         print("metrics: no LVM lines")
         return 1
     print(f"{len(rows)} seconds")
-    for key in COLS:
+    gkeys = sorted({k for r in rows for k in r if k.startswith("g_")})
+    for key in COLS + tuple(gkeys):
         s = stats(rows, key)
         if s:
             print(f"  {key:8} mean {s[0]:9.1f}   min {s[1]:7.0f}   max {s[2]:7.0f}   ({s[3]} s)")
