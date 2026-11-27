@@ -1,0 +1,121 @@
+lavender: profiler report by image and busiest pieces of each (generator: xnu/src/mk_prof2.py)
+
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index b781712..a642256 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1305,6 +1305,104 @@ lvp_top(const char *name, const char *what, uint64_t *v, uint32_t n, int top, vm
+ 	}
+ }
+ 
++/* lavender: user samples by image (xnu/src/mk_prof2.py) */
++#define LVP_IMGS 96
++static struct { uint64_t base; uint32_t n; char name[40]; } lvp_img[LVP_IMGS];
++static uint64_t lvp_cpage[4096];
++static uint16_t lvp_cimg[4096];
++static uint16_t lvp_simg[LVP_N];
++
++static int
++lvp_image_index(vm_map_t map, uint64_t pc)
++{
++	uint64_t page = pc & ~0x3fffull;
++	unsigned h = (unsigned)((page >> 14) % 4096);
++	if (lvp_cpage[h] == page) {
++		return lvp_cimg[h];
++	}
++	char nm[40];
++	uint64_t base = lvp_image(map, pc, nm, sizeof(nm));
++	int i;
++	for (i = 1; i < LVP_IMGS && lvp_img[i].base != 0 && lvp_img[i].base != base; i++) {
++	}
++	if (i == LVP_IMGS) {
++		i = 0;                                  /* (index 0: anything else) */
++	} else if (lvp_img[i].base == 0) {
++		lvp_img[i].base = base ? base : 1;
++		strlcpy(lvp_img[i].name, base ? nm : "(no image)", sizeof(lvp_img[i].name));
++	}
++	lvp_cpage[h] = page;
++	lvp_cimg[h] = (uint16_t)i;
++	return i;
++}
++
++static void
++lvp_by_image(const char *name, vm_map_t map, uint32_t n)
++{
++	static uint64_t buf[LVP_N];
++	bzero(lvp_img, sizeof(lvp_img));
++	bzero(lvp_cpage, sizeof(lvp_cpage));
++	strlcpy(lvp_img[0].name, "(other)", sizeof(lvp_img[0].name));
++	for (uint32_t i = 0; i < n; i++) {
++		if (lvp_user[i]) {
++			int k = lvp_image_index(map, lvp_pc[i]);
++			lvp_simg[i] = (uint16_t)k;
++			lvp_img[k].n++;
++		}
++	}
++	int order[LVP_IMGS], cnt = 0;
++	for (int k = 0; k < LVP_IMGS; k++) {
++		if (lvp_img[k].n != 0) {
++			order[cnt++] = k;
++		}
++	}
++	for (int a = 0; a < cnt; a++) {
++		for (int b = a + 1; b < cnt; b++) {
++			if (lvp_img[order[b]].n > lvp_img[order[a]].n) {
++				int t = order[a];
++				order[a] = order[b];
++				order[b] = t;
++			}
++		}
++	}
++	for (int a = 0; a < cnt && a < 40; a++) {
++		printf("SPF %s img %s n %u base 0x%llx\n", name, lvp_img[order[a]].name, lvp_img[order[a]].n, lvp_img[order[a]].base);
++	}
++	for (int a = 0; a < cnt && a < 8; a++) {
++		int k = order[a];
++		uint32_t m = 0;
++		if (k == 0 || lvp_img[k].base <= 1) {
++			continue;
++		}
++		for (uint32_t i = 0; i < n; i++) {
++			if (lvp_user[i] && lvp_simg[i] == k) {
++				buf[m++] = (lvp_pc[i] - lvp_img[k].base) & ~0x3full;
++			}
++		}
++		qsort(buf, m, sizeof(buf[0]), lvp_cmp);
++		for (int t = 0; t < 25; t++) {
++			uint64_t best = 0;
++			uint32_t bestn = 0, run = 0;
++			for (uint32_t i = 0; i < m; i++) {
++				run = (i > 0 && buf[i] == buf[i - 1]) ? run + 1 : 1;
++				if (buf[i] != ~0ull && run > bestn) {
++					bestn = run;
++					best = buf[i];
++				}
++			}
++			if (bestn < 3) {
++				break;
++			}
++			printf("SPF %s in %s +0x%llx n %u\n", name, lvp_img[k].name, best, bestn);
++			for (uint32_t i = 0; i < m; i++) {
++				if (buf[i] == best) {
++					buf[i] = ~0ull;
++				}
++			}
++		}
++	}
++}
++
+ void
+ lv_prof_run(const char *name, task_t task, uint32_t us, uint32_t secs)
+ {
+@@ -1332,7 +1430,8 @@ lv_prof_run(const char *name, task_t task, uint32_t us, uint32_t secs)
+ 	}
+ 	printf("SPF %s: %u samples (user %u, kernel %u), %u looks\n", name, n, nu, nk, lvp_looks);
+ 	vm_map_t map = get_task_map(task);
+-	lvp_top(name, "u pc", ubuf, nu, 60, map);
++	lvp_by_image(name, map, n);
++	lvp_top(name, "u pc", ubuf, nu, 30, map);
+ 	lvp_top(name, "k pc", kbuf, nk, 30, NULL);
+ 	nu = 0;
+ 	for (uint32_t i = 0; i < n; i++) {
