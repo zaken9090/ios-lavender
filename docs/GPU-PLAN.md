@@ -120,3 +120,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   libOSMesa 39%, QuartzCore 33%, libtopaz-gl 9% (surface_changed 3.3%, image_of walk ~2%), Espresso?
   9% (attribution doubtful), dnssd+corecrypto 5%. Next: Mesa offsets with the mesa-symbols artifact;
   QuartzCore needs the dyld shared cache symbols.
+- First project's backboardd findings, checked against this base: async flush (OSMesaFlushSync at frame
+  end), SubImage refill, glorder=2-style ordering, sampled surface_changed, MADVISE, LTO: already here.
+  Ported now: glsolid (patch_solid.py, one-colour full-viewport quads skipped or cleared, +27% home fps
+  there), image_of index, eagl -O2. Not taken: lower render size (picture quality). Raw first-project
+  profiles: C:\Users\Vasyl\Desktop\Claude\Projects\Android-iOS\dump\ (glprof*.txt, prof-*.txt).
+- Kernel part of backboardd samples (1149): mostly at ml_set_interrupts_enabled (the IPI lands when
+  interrupts come back on: time with interrupts off, caller unknown); next: kernel lr in the report.
