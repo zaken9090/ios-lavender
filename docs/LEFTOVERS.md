@@ -225,3 +225,4 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | 1130 | audio | clean tone buffers from CPU cache (dc civac) | SD0 still low in that run; data seen in a later run (t6) - cache not proven the cause | kept (needed for DMA anyway) |
 | boot-arg glgmem=1 | GPU | GMEM tiling instead of sysmem for fps (run fgmem, 1139) | screen flickered on the side swipe (user) | rejected: picture quality |
 | 1124-1129 (amp part) | audio | mainline MAX98927 init/enable (0x3A, 0xFF) | chip is a MAX98937: wrong map, GLOBAL_EN never held | replaced by the MAX98937 table in 1133 |
+| 1147 | GPU/CPU | `lv_kmsg_sig=0`: no SHA-256 kmsg signatures (first project 1035) | backboardd 17.8-18.7 ms CPU a frame either way (cpuframe ks0b/ks0c vs ks1b/ks1c) | default on; remove in the next cleanup |

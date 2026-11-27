@@ -111,3 +111,12 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   upstream of the GPU (CA commits); SpringBoard stacks need a symbolicated shared cache (not set up).
 - glgmem=1 measured again: slower (home 9, Settings 33-34) - rejected on speed as well.
 - Lower DDR (1017600): Settings 58 -> 38-44, so Settings is memory-bound; keep 1804800.
+- 1146 (`modem_idle_ms`, default 8): the modem watch loop sleeps 8 ms after 500 ms without glink traffic
+  (from 30 s on); modem thread 80 -> 25 ms per 6 s. Modem, Wi-Fi, LTE bars came up as before.
+- Static home with the cellular "searching" bars animating: backboardd draws 60 fps (51% of a core).
+- 1148/1149 `sweetprof=NAME`: IPI sampling profiler (live pc of the target's running threads, user and
+  kernel), report by image. `tools/cpuframe.ps1` = Settings scrolling, backboardd CPU per frame.
+  backboardd while scrolling Settings: ~18 ms CPU a frame (80-97% of one core) - CPU-bound. User samples:
+  libOSMesa 39%, QuartzCore 33%, libtopaz-gl 9% (surface_changed 3.3%, image_of walk ~2%), Espresso?
+  9% (attribution doubtful), dnssd+corecrypto 5%. Next: Mesa offsets with the mesa-symbols artifact;
+  QuartzCore needs the dyld shared cache symbols.
