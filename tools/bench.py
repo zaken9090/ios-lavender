@@ -133,6 +133,7 @@ def main():
     ap.add_argument("tag")
     ap.add_argument("--log")
     ap.add_argument("--settle", type=float, default=20)
+    ap.add_argument("--fast", action="store_true", help="the old flick swipes instead of slow finger-like drags")
     ap.add_argument("--results", default=os.path.join(HERE, "..", "..", "dump", "bench-results.txt"))
     a = ap.parse_args()
 
@@ -186,17 +187,22 @@ def main():
         if not home:
             print("bench: NOT UNLOCKED (see the screenshot)", file=sys.stderr)
 
+        # Default: slow drags of 2 s, a finger held on the screen the whole way, as the first lavender
+        # project's bench.sh did: the app follows every step and draws each frame itself, as with the
+        # user's finger. --fast: the old flicks (400/500 ms), whose rest iOS animates on its own.
+        drag, wait = (400, 2.0) if a.fast else (2000, 2.6)
         m = rd.mark()
         for _ in range(3):
-            cmd(phone, "lv:swipe 950 1300 150 1300 400", 2.0)   # to the widgets page
-            cmd(phone, "lv:swipe 150 1300 950 1300 400", 2.0)   # back
+            cmd(phone, "lv:swipe 950 1300 150 1300 %d" % drag, wait)   # to the next page
+            cmd(phone, "lv:swipe 150 1300 950 1300 %d" % drag, wait)   # back
         home_log = rd.since(m)
 
         cmd(phone, "lv:tap %d %d" % SETTINGS_ICON, 3.0)
         m = rd.mark()
+        sdrag, swait = (500, 1.5) if a.fast else (2000, 2.6)
         for _ in range(3):
-            cmd(phone, "lv:swipe 540 1900 540 600 500", 1.5)
-            cmd(phone, "lv:swipe 540 600 540 1900 500", 1.5)
+            cmd(phone, "lv:swipe 540 2000 540 500 %d" % sdrag, swait)
+            cmd(phone, "lv:swipe 540 500 540 2000 %d" % sdrag, swait)
         settings_log = rd.since(m)
         screenshot(phone, rd, f"bench_{a.tag}_{stamp}_settings.png")
         cmd(phone, "lv:swipe 540 2330 540 1500 200", 2.0)     # home
@@ -212,7 +218,7 @@ def main():
     if temps:
         g, h, s, ld, c, cp = (x.decode() for x in temps[-1])
         therm = f" | gpu {g} C, hottest {h} C (s{s}), load {ld}% (cpu{c} {cp}%)"
-    line = (f"BENCH {a.tag} {stamp} {'' if home else 'NOT-UNLOCKED '}"
+    line = (f"BENCH {a.tag} {stamp} {'fast ' if a.fast else 'slow '}{'' if home else 'NOT-UNLOCKED '}"
             f"home: {fps_stats(home_log)} | settings: {fps_stats(settings_log)}{therm}")
     print(line)
     with open(a.results, "a", encoding="utf-8") as f:

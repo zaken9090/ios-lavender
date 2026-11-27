@@ -1,0 +1,27 @@
+lavender: lv:swipe steps every 8 ms like a finger, boot-arg lv_swipe_ms (generator: xnu/src/mk_swipe8.py)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 5f0828c..fe409f5 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -704,9 +704,18 @@ ud_touch(const char *arg, bool swipe)
+ 	}
+ 	sweet_hid_touch(9, 1, v[0], v[1]);
+ 	if (swipe) {
+-		int steps = v[4] / 16 > 0 ? v[4] / 16 : 1;
++		/* lavender: a finger's report rate (xnu/src/mk_swipe8.py) */
++		static int step_ms;
++		if (step_ms == 0) {
++			step_ms = 8;
++			PE_parse_boot_argn("lv_swipe_ms", &step_ms, sizeof(step_ms));
++			if (step_ms < 4 || step_ms > 33) {
++				step_ms = 8;
++			}
++		}
++		int steps = v[4] / step_ms > 0 ? v[4] / step_ms : 1;
+ 		for (int i = 1; i <= steps; i++) {
+-			ud_sleep_ms(16);
++			ud_sleep_ms((unsigned)step_ms);
+ 			sweet_hid_touch(9, 1, v[0] + (v[2] - v[0]) * i / steps, v[1] + (v[3] - v[1]) * i / steps);
+ 		}
+ 		sweet_hid_touch(9, 0, v[2], v[3]);
