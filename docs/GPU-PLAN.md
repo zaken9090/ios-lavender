@@ -254,3 +254,25 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   19.6-22.7 against 11 before it was rejected for flicker). The lever for the home screen is the
   memory path (tiled rendering without the flicker, bus/DDR), not the GPU or CPU clock. 300 MHz stays
   the default (less heat for the same fps).
+- xnu 1164 (LVG line: the GPU's own counters) and 1165 (thermal guard), kernel run-46068017640. Baseline
+  to compare every later optimisation with (user, 2026-11-27; bench q1a, Gold 1747 MHz, GPU 300 MHz;
+  the bench line now carries Mpx/frame, mem wait, tex miss):
+
+  | per frame | home (App Library), 14.1 fps | Settings slow drag, 51.7 fps |
+  |---|---|---|
+  | pixels passed by the render backend | **55.1 M** (20 screens of 2.74 M) | **20.0 M** (7.3 screens) |
+  | texture cache line requests / misses | 30.1 M / 6.9 M (23 %) | 3.5 M / 0.88 M (25 %) |
+  | memory read beats for textures | 4.98 M | 0.78 M |
+  | memory requests, wait each | 54 098, **253 cycles** (0.84 us) | 7 516, **268 cycles** |
+  | GPU time waiting for memory | 64 % | 35 % |
+  | render backend stalled on a full FIFO | 138 % of the clock (summed over pipes) | 100 % |
+  | shader ALU working / busy | 92 % / 191 % | 96 % / 146 % |
+
+  The GPU draws many screens' worth of pixels a frame and every memory request costs ~0.85 us; that
+  product is the frame time on the home screen. Next: which draws make the 7 and 20 screens (ours:
+  the preserve copy is one of them) and why a request waits that long (DDR / BIMC really at 1804 MHz?
+  kernel memcpy 1776 MB/s at Gold 1747 MHz, 2500 at 2208).
+  Thermal guard checked with lv_therm_hi=55: Gold stepped 1747 -> 1401 -> 1113 MHz by itself (r1); even
+  at 1113 MHz the bench gave home 15.0, Settings 48.7.
+  Open: boot r2 (same kernel, default limits) stopped answering over USB ~50 s after the UI was up
+  (host writes time out, then no log); r1 and q1 ran their benches. Cause not known yet.

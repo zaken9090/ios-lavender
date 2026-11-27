@@ -108,6 +108,17 @@ def short(rows):
         s = stats(rows, key)
         if s:
             out.append(fmt % s[0])
+    # the GPU's work per frame (xnu 1164), compared from run to run (user, 2026-11-27): million pixels
+    # passed a frame, cycles a memory request waits, texture cache misses
+    s = stats(rows, "g_kpix_f")
+    if s:
+        out.append("%.1f Mpx/frame" % (s[0] / 1000))
+    s = stats(rows, "g_lat")
+    if s:
+        out.append("mem wait %.0f cyc" % s[0])
+    s = stats(rows, "g_misspct")
+    if s:
+        out.append("tex miss %.0f%%" % s[0])
     return ", ".join(out)
 
 
