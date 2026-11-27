@@ -76,3 +76,20 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   CP done fetching IB1) -> "recovery done", UI went on (33 fps, 465 submissions / 5 s), home screen fine.
 - Open: the cause (a draw in backboardd's IB2; decode the IB2 from the dump), RBBM_STATUS after the reset
   still 0xc00003c1.
+
+## Hang hunt and fps levers (2026-11-27, kernels 1140-1141, userland 45927392351)
+
+| Run | Change | Home fps | Settings fps | Hang |
+|---|---|---|---|---|
+| h1139, h1139r1 | base (300 MHz, sysmem) | 10-11 | 37-43 | 1 of 2 |
+| f600 | gpu 600 MHz | 11.2 | 45.4 | yes |
+| fgmem / f600g | glgmem=1 (tiles) | 19.6 / 22.7 | - / 25.7 | yes; side-swipe flicker (user): rejected |
+| cg1-cg3 | gpu_hwcg=0 (1140) | 9.6-28.6 | 40-45.6 | none in 3 |
+| u1, u2 | + userland blur/colour fixes, MADVISE, LTO | 24.6 / 8.8 | 49.3 / 47.2 | none |
+| r1 | + lv_rpm_scale=1 lv_ddr_khz=1804800 (1141) | 14.3 | 51.8 | none; memcpy 2050 -> 2524 MB/s |
+
+- gpu_hwcg=0 (all GPU block clocks on): 6 boots in a row without a hang (before: about one a boot). Next: find
+  the block whose gating hangs (bisect the a512_hwcg table) so gating can stay on elsewhere.
+- Home fps varies a lot between runs (8.8-28.6) with the same setup: the bench's home phase is not stable.
+- Userland (first project ea74d71/e157d39/877dd11): dock and search pill correct again (were white/yellow).
+- Settings shot during scrolling shows doubled text; lv:shot mixes frames in motion, static shots are clean.
