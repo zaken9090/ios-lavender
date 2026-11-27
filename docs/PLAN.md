@@ -2,7 +2,7 @@
 
 The order work is done in until the user changes it. Each item ends with a bench (tools/bench.py, LVM
 metrics), screenshots where the picture could change, and a line in GPU-PLAN.md / LEFTOVERS.md.
-Base: kernel run-46064163663 (to 1163) + userland 46027949301, Gold 1747 MHz, GPU 300 MHz.
+Base: kernel run-46077885435 (to 1167) + userland 46079146807, Gold 1747 MHz, GPU 300 MHz.
 
 ## P1 - fps: memory traffic of a frame
 
@@ -16,9 +16,9 @@ memory it moves. No picture quality may be traded.
    no upload for a surface that is fully redrawn).
 3. Fixed waits in the frame path (fence polling, presenter) once the traffic is down.
 
-4. (found 2026-11-28) 87 % of display frames are drawn in the surface the panel still shows. Fix: one
-   canvas CoreAnimation draws into + three scanout buffers the finished frame is copied to
-   (GPU-PLAN.md, 2026-11-28). This replaces the preserve copy and is the next piece of work.
+4. (done 2026-11-28, xnu 1167 + userland patch_scanout.py) 87 % of display frames were copied into the
+   surface the panel still showed; the end-of-frame copy now goes to one of four scanout surfaces
+   (0 % in view, fps unchanged). Next here: the 7-20 screens of pixels a frame and the 0.85 us memory wait.
 
 ## P2 - safety: temperature (done: xnu 1165)
 

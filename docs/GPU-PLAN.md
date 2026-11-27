@@ -300,3 +300,21 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     kernel (three scanout buffers, "show this one for the surface swapped").
   - s2 boot (gltrace_draws=11): three GPU hangs, the third recovery failed (old code), garbled picture
     (user video 23-35-46). r2 boot: USB stopped answering once; did not repeat in 8 later boots.
+- **Frames are no longer drawn where the panel shows them** (xnu 1167, kernel run-46077885435 + userland
+  46079146807, runs w2a/w2b). CoreAnimation draws a display frame into a texture of its own and eagl
+  copies it into the surface at the frame's end (the "mirror" blit): that copy was what landed in a
+  surface on the panel. The copy now goes into one of four scanout surfaces of ours that the display
+  does not hold, the swapped surface names it (IOSurface value "lv-show"), and the kernel shows the
+  named one. No copy added.
+
+  | | before (v1a) | waiting, glinuse=20 (v2) | scanout surfaces (w2) |
+  |---|---|---|---|
+  | display frames begun in a surface in use | 87 % | (waited out) | **0 %** (0 of 9033) |
+  | Settings slow drag | 50.3 fps, 20.7 Mpx | 32.8 fps | 50.5 fps, 19.8 Mpx |
+  | home (App Library) | 14.9 fps, 53.7 Mpx | 13.9 fps | 13.7 fps, 56.4 Mpx |
+  | memory wait / texture misses | 259-266 cyc / 23-25 % | same | 255-267 cyc / 23-25 % |
+
+  9032 of 9033 copies went to a scanout surface, none had to fall back; 0 GPU hangs; screenshot of
+  Settings correct. With glinuse=20 the user saw the tremble gone (and fewer fps); the scanout build
+  is to be judged by eye next. glscan=0 turns it off, sweetfb_show=0 makes the kernel ignore the value.
+  Still open by the user's eye: purple cards in the app switcher.
