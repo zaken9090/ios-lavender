@@ -1,0 +1,25 @@
+lavender: boot-arg lv_swaplog=N, swaps say their IOSurfaces (generator: xnu/src/mk_swaplog.py)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 4eb2030..1c5c5a1 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -971,6 +971,18 @@ void
+ AppleCLCD::swap(const uint8_t *rec)
+ {
+ 	sweet_fps_count();
++	/* lavender: lv_swaplog=N (xnu/src/mk_swaplog.py) */
++	static int swaplog = -1;
++	static uint32_t swapn;
++	if (swaplog < 0) {
++		swaplog = 0;
++		PE_parse_boot_argn("lv_swaplog", &swaplog, sizeof(swaplog));
++	}
++	if (swaplog > 0) {
++		swaplog--;
++		IOLog("LV SWAP %u: layers %#x ids %u %u %u %u\n", ++swapn, get32(rec, 0x104), get32(rec, 0x54), get32(rec, 0x58),
++		    get32(rec, 0x5c), get32(rec, 0x60));
++	}
+ 	SweetSurface *held[4] = {};
+ 	uint32_t mask = get32(rec, 0x104);
+ 	for (uint32_t i = 0; i < 4 && i < SWEET_FB_LAYERS; i++) {
