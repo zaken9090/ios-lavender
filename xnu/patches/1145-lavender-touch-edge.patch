@@ -1,0 +1,41 @@
+lavender: touch reads a report only after the event line's rising edge, latched by TLMM (generator: xnu/src/mk_touchedge.py)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 401b449..bd8c144 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -340,9 +340,32 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 	    line_high(lt.irq) ? "high" : "low");
+ 
+ 	bool any_down = false;
++	/* lavender: the report comes with a rising edge, latched by TLMM (xnu/src/mk_touchedge.py) */
++	int edge = 1;
++	unsigned quiet = 0, edges = 0;
++	PE_parse_boot_argn("sweettouch_edge", &edge, sizeof(edge));
++	if (edge) {
++		pin_wr(lt.irq, 8, (3u << 5) | (1u << 4) | (1u << 2) | (1u << 1));     /* KPSS, raw status, rising edge */
++		pin_wr(lt.irq, 0xc, 0);
++		printf("SWEET TOUCH: reports on the event line's rising edge (intr cfg 0x%x)\n", pin_rd(lt.irq, 8));
++	}
+ 	for (;;) {
+-		/* A report waits while the line is low; after the last finger lifts, read once more. */
+-		if (!line_high(lt.irq) || any_down) {
++		bool due;
++		if (edge) {
++			bool latched = (pin_rd(lt.irq, 0xc) & 1) != 0;
++			if (latched) {
++				pin_wr(lt.irq, 0xc, 0);         /* (before the read: an edge during it is kept) */
++				if (++edges == 1) {
++					printf("SWEET TOUCH: first edge latched\n");
++				}
++			}
++			due = latched || any_down || ++quiet >= 20;
++		} else {
++			/* A report waits while the line is low; after the last finger lifts, read once more. */
++			due = !line_high(lt.irq) || any_down;
++		}
++		if (due) {
++			quiet = 0;
+ 			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
+ 				lt.reports++;
+ 				if ((int64_t)lt.reports <= lt.diag || (lt.diag && lt.reports % 200 == 0)) {
