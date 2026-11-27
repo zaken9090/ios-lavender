@@ -1,0 +1,32 @@
+lavender: GPU clock gating as boot-arg gpu_hwcg (default 1) for the hang hunt (generator: xnu/src/mk_gpuhwcg.py)
+
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index 2c4cd87..e443c08 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -947,11 +947,21 @@ a5_hw_init(void)
+ 	g_w(A5_UCHE_MODE_CNTL, 1u << 29);
+ 	g_w(A5_CP_CHICKEN_DBG, 0x02000000);
+ 	g_w(A5_RBBM_AHB_CNTL1, 0xA6FFFFFF);
+-	for (unsigned i = 0; i < sizeof(a512_hwcg) / sizeof(a512_hwcg[0]); i++) {
+-		g_w(a512_hwcg[i][0], a512_hwcg[i][1]);
++	uint32_t hwcg = 1;
++	PE_parse_boot_argn("gpu_hwcg", &hwcg, sizeof(hwcg));
++	if (hwcg != 0) {
++		for (unsigned i = 0; i < sizeof(a512_hwcg) / sizeof(a512_hwcg[0]); i++) {
++			g_w(a512_hwcg[i][0], a512_hwcg[i][1]);
++		}
++		g_w(A5_RBBM_CLOCK_CNTL, 0xAAA8AA00);
++		g_w(A5_RBBM_ISDB_CNT, 0x182);
++	} else {
++		for (unsigned i = 0; i < sizeof(a512_hwcg) / sizeof(a512_hwcg[0]); i++) {
++			g_w(a512_hwcg[i][0], 0);        /* as KGSL a5xx_hwcg_set(false) */
++		}
++		g_w(A5_RBBM_CLOCK_CNTL, 0);             /* gpu_hwcg=0: all clocks on (mk_gpuhwcg.py) */
++		g_w(A5_RBBM_ISDB_CNT, 0);
+ 	}
+-	g_w(A5_RBBM_CLOCK_CNTL, 0xAAA8AA00);
+-	g_w(A5_RBBM_ISDB_CNT, 0x182);
+ 	g_w(A5_RBBM_AHB_CNTL2, 0x3F);
+ 	g_w(A5_TPL1_MODE_CNTL, 1u << 7);                /* hbb 1 */
+ 	g_w(A5_RB_MODE_CNTL, 1u << 1);
