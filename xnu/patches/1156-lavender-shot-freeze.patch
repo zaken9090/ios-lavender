@@ -1,0 +1,60 @@
+lavender: lv:shot freezes the presenter until sent, exact frames (generator: xnu/src/mk_shotfreeze.py)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index fe409f5..0efb212 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -753,6 +753,12 @@ ud_rx_done(void)
+ 		ud_reboot_bootloader();
+ 	} else if (strcmp(cmd, "lv:shot") == 0) {
+ 		ud.shot_pending = true;
++		static int freeze = -1;
++		if (freeze < 0) {
++			freeze = 1;
++			PE_parse_boot_argn("lv_shot_freeze", &freeze, sizeof(freeze));
++		}
++		sweet_shot_busy = freeze;
+ 	} else if (strncmp(cmd, "lv:time ", 8) == 0) {
+ 		ud_set_time(cmd + 8);
+ 	} else if (strncmp(cmd, "lv:tap ", 7) == 0) {
+@@ -778,6 +784,9 @@ ud_rx_done(void)
+  */
+ static volatile uint32_t *ud_vig0;        /* lavender: MDP VIG0, what the panel shows (xnu/src/mk_shot.py) */
+ 
++/* lavender: while a screenshot goes out the presenter shows no new frame (xnu/src/mk_shotfreeze.py) */
++volatile int sweet_shot_busy;
++
+ static bool
+ ud_tx_shot(void)
+ {
+@@ -813,6 +822,7 @@ ud_tx_shot(void)
+ 		return true;
+ 	}
+ 	if (ud.shot_left == 0) {
++		sweet_shot_busy = 0;            /* (the last piece has gone) */
+ 		return false;
+ 	}
+ 	/*
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 6f6b012..1590c05 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -48,6 +48,7 @@ extern "C" void topaz_audio_init(void);
+ extern "C" void sweet_amfi_service_init(void);
+ extern "C" void sweet_busy_init(void);              /* iokit/Kernel/arm/SweetBusy.cpp (boot-arg sweetbusy=N) */             /* iokit/Kernel/arm/TopazModem.cpp (boot-arg modem=1) */
+ extern "C" int sweet_console_copy_dirty(void *dst);
++extern "C" volatile int sweet_shot_busy;           /* bsd/dev/sweet_usb.c (xnu/src/mk_shotfreeze.py) */
+ extern "C" void topaz_adreno_init(void);           /* iokit/Kernel/arm/TopazAdreno.cpp (boot-arg gpu=1) */
+ bool topaz_surface_drawn(SweetSurface *surface, uint64_t milliseconds);   /* RedwoodGPU.cpp */
+ 
+@@ -1072,6 +1073,10 @@ AppleCLCD::showDirect(const uint8_t *rec, SweetSurface **heldIn)
+ 		fDirty = false;                                 /* (anything older not shown at all) */
+ 		IOLockUnlock(fLock);
+ 		sweet_hold_set(dropped, false);
++		/* lavender: a screenshot is going out: the frame on the panel stays (xnu/src/mk_shotfreeze.py) */
++		for (int t = 0; sweet_shot_busy && t < 1500; t++) {
++			IOSleep(2);
++		}
+ 		uint64_t waited = mach_absolute_time(), wns = 0;  /* (present waits for the GPU too) */
+ 		present(rec);
+ 		/* lavender: sleep until the panel's frame is nearly over, then look (xnu/src/mk_latchsleep.py) */
