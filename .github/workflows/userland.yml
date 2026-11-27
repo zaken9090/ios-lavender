@@ -52,6 +52,7 @@ jobs:
           python3 userland/gpu/patch_tc.py work/gpu/eagl.c
           python3 userland/gpu/patch_blurcolour.py work/gpu/eagl.c
           python3 userland/gpu/patch_imageof.py work/gpu/eagl.c
+          python3 userland/gpu/patch_solid.py work/gpu/eagl.c
           # Mesa patches of this repo (threaded context for OSMesa + a5xx fixes), applied with the base's by mk-mesa-mac.sh
           cp userland/mesa/*.patch work/mesa/
           python3 userland/gpu/patch_mesacpu.py work
