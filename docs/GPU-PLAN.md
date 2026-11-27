@@ -127,3 +127,18 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   profiles: C:\Users\Vasyl\Desktop\Claude\Projects\Android-iOS\dump\ (glprof*.txt, prof-*.txt).
 - Kernel part of backboardd samples (1149): mostly at ml_set_interrupts_enabled (the IPI lands when
   interrupts come back on: time with interrupts off, caller unknown); next: kernel lr in the report.
+- Shared-cache symbols: WSL has /root/ipsw/systemos.dmg (apfs-fuse -> /mnt/systemos), the dyld cache
+  copied to /root/dsc, `ipsw` in /usr/local/bin; `ipsw dyld symaddr ... --image X` dumps, tools/dscsym.py
+  names the profiler's pieces (slide = run-time image base - cache __TEXT address).
+- backboardd while scrolling Settings (pf5/pf6, symbols): QuartzCore 34% = CA's layer-tree update
+  (HitTestTree::append_layer_node, Updater::prepare_layer0/layer_node, LayerNode alloc/delete); Mesa 37%
+  flat (fd_submit_append_bo, _mesa_use_program, state validation); malloc/free 8.5% ("Espresso" in 1149's
+  report = libsystem_malloc), memcmp/memset 2.8% ("dnssd"), pthread_mutex 2.2% ("corecrypto"); eagl 9%.
+- patch_bbdnano.py: the wrapper's execv lost launchd's nano-allocator spawn flag (xnu adds
+  MallocNanoZone=1 only for posix_spawn with attributes); now set in the environment (bbdnano=0: off).
+  nanov2_malloc in use; backboardd 18.1-19.4 -> 17.0-17.8 ms CPU a frame, fps 53/43 -> 55/51 (nz2).
+- glsolid, image_of index, eagl -O2 (userland 45984996010): no measurable change in ms a frame (pf5);
+  screenshots pixel-identical (dock max diff 1 level).
+- Hangs: 3 boots with sweetprof= (pf3, nz1, pf6) hung or lost lv:shot later; without it (nz2) stable.
+  sweetprof stays diagnostic only (opt-in); cause not found (last lines: failed contiguous scans + zone_gc,
+  which also show in good runs).
