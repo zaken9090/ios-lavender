@@ -57,7 +57,7 @@ index 58878ce..8a77568 100644
  		return;                                 /* opt-in since mk_cleanup1.py */
  	}
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
-index d1223c4..ad70636 100644
+index d1223c4..b781712 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
 @@ -1184,6 +1184,166 @@ sweet_sample_task(const char *name, int pid, task_t task)
@@ -68,7 +68,7 @@ index d1223c4..ad70636 100644
 + * lavender: statistical profiler, boot-arg sweetprof=NAME (xnu/src/mk_prof.py)
 + */
 +#include <arm/cpu_data_internal.h>
-+#include <libkern/libkern.h>
++extern void qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 +
 +typedef void (*lvp_func_t)(void *);
 +extern unsigned int cpu_broadcast_xcall_simple(boolean_t self_xcall, lvp_func_t func, void *parm);

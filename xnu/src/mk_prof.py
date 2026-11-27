@@ -33,7 +33,7 @@ bsd_exception(''', '''/*
  * lavender: statistical profiler, boot-arg sweetprof=NAME (xnu/src/mk_prof.py)
  */
 #include <arm/cpu_data_internal.h>
-#include <libkern/libkern.h>
+extern void qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 
 typedef void (*lvp_func_t)(void *);
 extern unsigned int cpu_broadcast_xcall_simple(boolean_t self_xcall, lvp_func_t func, void *parm);
