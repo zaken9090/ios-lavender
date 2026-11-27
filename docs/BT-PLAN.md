@@ -32,3 +32,12 @@
 - B3: kernel side for iOS: the "bluetooth" registry node (address, transport-encoding 3), /dev/btpoweroff, /dev/btwake, kernel control "com.apple.uart.bluetooth" (and the Skywalk one, or the BT_HCI_TRANSPORT route), all on top of the B2 driver.
 - B4: translation layer in the kernel control: Broadcom boot commands (FC18, FC2E, FC4C, FC4E, FC01, FC27, FD18/FD97/FD1E, ...) answered locally (FC01 -> Qualcomm address), Read_Local_Version rewritten (manufacturer 15, subversion 0x420E), Qualcomm vendor events and sleep bytes filtered; runtime Broadcom VSCs answered or refused.
 - B5: Settings shows Bluetooth on, scan finds devices; pairing needs the user.
+- Headset retest (2026-11-27, xnu 1149, run bt2): connects, then drops; the BT switch in Settings
+  restarts. Cause: **bluetoothd crashes** (SIGSEGV, far 0) in `os_channel_get_fd(NULL)` from its
+  "AudioSkywalkPipeReadLoop" thread, right after "Publishing audio device ... on a2dpHandle": the A2DP
+  audio path goes through a Skywalk user-pipe nexus that bluetoothd creates itself ("Created skywalk
+  nexus provider", AudioSkywalkProvider / nexus_controller); the channel open failed and was not
+  checked. The decision is a virtual call ("Device supports Skywalk Path"). Next: bluetoothd's own log
+  (sweetstderr=bluetoothd / OS_ACTIVITY_DT_MODE) for the nexus error, then the kernel's Skywalk
+  user-pipe nexus (os_nexus_controller_create / os_channel_create) on our xnu. Symbols: WSL
+  /root/dsc (ipsw), bluetoothd from /root/ipsw/os.dmg (apfs-fuse /mnt/os).
