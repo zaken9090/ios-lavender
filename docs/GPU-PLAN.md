@@ -318,3 +318,8 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   Settings correct. With glinuse=20 the user saw the tremble gone (and fewer fps); the scanout build
   is to be judged by eye next. glscan=0 turns it off, sweetfb_show=0 makes the kernel ignore the value.
   Still open by the user's eye: purple cards in the app switcher.
+- 2026-11-28 01:10: the user checked the scanout build by finger - the tremble at the bottom and the
+  torn rows are gone ("все зникло"). Scanout surfaces stay the default.
+- Tiled textures in Mesa (glenv=FD_MESA_DEBUG=sysmem,ttile, run x1): a tear at boot and "many problems
+  with the screen" (user); memory wait 216 cycles (255-267 without), texture cache misses 34 % (23-25 %).
+  Rejected: picture.
