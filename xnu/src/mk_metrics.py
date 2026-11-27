@@ -87,7 +87,7 @@ extern unsigned int lvm_level __asm("_memorystatus_level");
 }
 
 /* TopazAdreno.cpp */
-bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
+extern "C" bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
 
 static volatile uint32_t *tm, *pll_gold, *pll_silver, *gold_rcg, *apcs_common;
 static uint32_t period_ms = 1000, khz_every = 10, top_n = 6;

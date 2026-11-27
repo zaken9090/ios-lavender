@@ -99,7 +99,7 @@ index 088dcde..e99ea3d 100644
  	} else if (strcmp(cmd, "lv:volup") == 0) {
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
 new file mode 100644
-index 0000000..fa9f608
+index 0000000..70f0cb4
 --- /dev/null
 +++ b/iokit/Kernel/arm/LavenderMetrics.cpp
 @@ -0,0 +1,344 @@
@@ -152,7 +152,7 @@ index 0000000..fa9f608
 +}
 +
 +/* TopazAdreno.cpp */
-+bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
++extern "C" bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
 +
 +static volatile uint32_t *tm, *pll_gold, *pll_silver, *gold_rcg, *apcs_common;
 +static uint32_t period_ms = 1000, khz_every = 10, top_n = 6;
