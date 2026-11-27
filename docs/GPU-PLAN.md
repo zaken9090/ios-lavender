@@ -146,3 +146,9 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   on the boot logo and on a hung screen. Not in iOS's frames (no red there in any lv:shot); so it is in the
   buffer VIG0 shows when no iOS frame is (console shadow / splash). Not drawn by the shim (text only) nor by
   our patches (no such colour); next: dump that buffer's corner, check ABL's layer mixer / border colour.
+- Bisect of today's GPU hangs, wrong textures (Photos icon drawn as Phone) and stalls: eagl built -O2
+  (userland 45980620775..45988478727). Kernel 1147 + old userland: stable; -O1 + nano (+/-): stable,
+  4 benches each, 0 hangs (o1, o1n, o1k). eagl stays -O1 (undefined behaviour somewhere in eagl.c).
+- Known-good now: kernel run-45979058523 (to 1149), userland 45999741177 (nano malloc in the backboardd
+  wrapper; glsolid and image_of removed: no gain), boot-args as before. Bench cl/clb/clc: home 27.3-27.8,
+  Settings 51-57, 0 GPU hangs; screenshots clean. sweetprof's "hangs" were all on -O2 userland.
