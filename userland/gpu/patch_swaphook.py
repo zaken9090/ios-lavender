@@ -176,9 +176,14 @@ static int
 lv_swap_begin(void *framebuffer, int *token)
 {
 	static void (*before)(void);
+	static int looked;
 
-	if (before == NULL) {
-		before = (void (*)(void))dlsym(RTLD_DEFAULT, "redwood_eagl_before_swap");
+	if (!looked) {
+		/* (the library is loaded by this file's constructor, not into the global namespace) */
+		void *gl = dlopen(TOPAZ_GL, RTLD_NOW);
+
+		before = gl != NULL ? (void (*)(void))dlsym(gl, "redwood_eagl_before_swap") : NULL;
+		looked = 1;
 	}
 	if (before != NULL) {
 		before();
