@@ -1,0 +1,16 @@
+lavender: Bluetooth UART - read only full FIFO words outside a stale event (generator: xnu/src/mk_bt32.py)
+
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 277d31f..8fde57d 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -177,7 +177,8 @@ bt_rx_poll(void)
+ 	}
+ 	/* words before the stale event are full */
+ 	bool got = false;
+-	while (rd(uart, U_SR) & SR_RX_READY) {
++	uint32_t words = rd(uart, U_RXFS) & 0x7F;      /* full words now; a partial one stays for the stale branch */
++	while (words-- > 0 && (rd(uart, U_SR) & SR_RX_READY)) {
+ 		uint32_t w = rd(uart, U_RF);
+ 		for (int i = 0; i < 4; i++) {
+ 			rx_push((uint8_t)(w >> (8 * i)));
