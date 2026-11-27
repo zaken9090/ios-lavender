@@ -1,0 +1,38 @@
+lavender: modem watch loop sleeps modem_idle_ms while glink is quiet (generator: xnu/src/mk_modemidle.py)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index 8104dca..80c3610 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -5655,7 +5655,13 @@ modem_watch(struct smem_part_hdr *part, unsigned seconds)
+ 	}
+ 	ipa_out = smp2p_add_out(out, "ipa", 0);
+ 	bool glink = false;
+-	for (unsigned ms = 0; seconds == 0 || ms < seconds * 1000; ms++) {
++	/* lavender: longer sleeps while glink is quiet (xnu/src/mk_modemidle.py) */
++	uint32_t idle_ms = 8, last_act = ~0u, quiet = 0, step = 1;
++	(void)PE_parse_boot_argn("modem_idle_ms", &idle_ms, sizeof(idle_ms));
++	if (idle_ms > 50) {
++		idle_ms = 50;
++	}
++	for (unsigned ms = 0; seconds == 0 || ms < seconds * 1000; ms += step) {
+ 		if (ready && !glink) {
+ 			glink = glink_start(part);
+ 			if (!glink) {
+@@ -5719,7 +5725,15 @@ modem_watch(struct smem_part_hdr *part, unsigned seconds)
+ 			}
+ 			ipa_last = v;
+ 		}
+-		IOSleep(1);
++		uint32_t act = g_rx_msgs + g_tx_msgs + (g_txq_tail - g_txq_head);
++		if (act != last_act) {
++			last_act = act;
++			quiet = 0;
++		} else {
++			quiet += step;
++		}
++		step = (idle_ms > 1 && glink && ms >= 30000 && quiet >= 500) ? idle_ms : 1;
++		IOSleep(step);
+ 	}
+ 	LOG("watch done: slave-kernel %08x, %s", sk_last, ready ? "READY" : "NOT ready");
+ 	if (glink) {
