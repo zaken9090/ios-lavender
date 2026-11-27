@@ -1,0 +1,123 @@
+lavender: audio A10 - volume control on Speaker, applied by the kernel (generator: xnu/src/mk_audio18.py)
+
+diff --git a/iokit/Kernel/arm/LavenderIOAudio2.cpp b/iokit/Kernel/arm/LavenderIOAudio2.cpp
+index 10806ac..0514939 100644
+--- a/iokit/Kernel/arm/LavenderIOAudio2.cpp
++++ b/iokit/Kernel/arm/LavenderIOAudio2.cpp
+@@ -20,6 +20,7 @@
+ extern "C" void lv_snd_play(const int16_t *frames, uint32_t count);     /* TopazAudio.cpp */
+ extern "C" void lv_snd_running(bool on);
+ extern "C" void lv_ioaudio2_publish(void);
++extern "C" void lv_snd_volume(uint32_t value);                         /* TopazAudio.cpp: 0..100 */
+ 
+ enum : uint32_t {
+ 	A2Rate = 48000, A2Ring = 8192, A2Period = 240, A2Stream = 1,
+@@ -115,6 +116,7 @@ public:
+ 	bool running, stopping;
+ 	uint64_t startTime, seed;
+ 	int32_t hog;
++	uint32_t volume;
+ 
+ 	bool initRole(bool input, const char *u);
+ 	uint32_t channels() const { return isInput ? 1 : 2; }
+@@ -195,6 +197,37 @@ IOAudio2Device::publish(IORegistryEntry *e)
+ 	}
+ 	OSArray *c = OSArray::withCapacity(1);
+ 	if (c != NULL) {
++		if (!isInput) {
++			/* control 1: output volume, 0..100 = -64 dB .. 0 dB (mk_audio18.py) */
++			OSDictionary *v = OSDictionary::withCapacity(16), *m = OSDictionary::withCapacity(4);
++			OSArray *map = OSArray::withCapacity(1);
++			if (v != NULL && m != NULL && map != NULL) {
++				a2num(v, "control ID", 1);
++				a2num(v, "class", 0x766c6d65);              /* 'vlme' */
++				a2num(v, "base class", 0x6c65766c);         /* 'levl' */
++				a2num(v, "scope", 0x6f757470);              /* 'outp' */
++				a2num(v, "element", 0);
++				a2num(v, "value", volume);
++				v->setObject("read only", kOSBooleanFalse);
++				OSString *nm = OSString::withCString("Speaker Volume");
++				if (nm != NULL) {
++					v->setObject("name", nm);
++					nm->release();
++				}
++				a2num(v, "minimum value", 0);
++				a2num(v, "maximum value", 100);
++				a2num(m, "start int value", 0);
++				a2num(m, "integer steps", 100);
++				a2num(m, "start db value", (uint64_t)(-(int64_t)64 << 32), 64);
++				a2num(m, "db per step", (uint64_t)((int64_t)64 << 32) / 100, 64);
++				map->setObject(m);
++				v->setObject("range map", map);
++				c->setObject(v);
++			}
++			OSSafeReleaseNULL(v);
++			OSSafeReleaseNULL(m);
++			OSSafeReleaseNULL(map);
++		}
+ 		e->setProperty("controls", c);
+ 		c->release();
+ 	}
+@@ -392,8 +425,19 @@ IOAudio2DeviceUserClient::externalMethod(uint32_t sel, IOExternalMethodArguments
+ 	case 11:
+ 		started = false;
+ 		return dev->stopIO();
+-	case 2:
+-		return kIOReturnBadArgument;            /* no controls */
++	case 2:                                         /* SetControlValue: control ID, value */
++		if (a->scalarInputCount >= 2 && a->scalarInput[0] == 1 && !dev->isInput) {
++			uint32_t v = a->scalarInput[1] > 100 ? 100 : (uint32_t)a->scalarInput[1];
++			dev->volume = v;
++			lv_snd_volume(v);
++			LOG("%s: volume control set to %u", dev->uid, v);
++			if (a->scalarOutputCount >= 1) {
++				a->scalarOutput[0] = v;
++				a->scalarOutputCount = 1;
++			}
++			return kIOReturnSuccess;
++		}
++		return kIOReturnBadArgument;
+ 	case 3:
+ 		return kIOReturnSuccess;
+ 	case 4: {
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 729410e..dd47a98 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1512,6 +1512,20 @@ lv_snd_running(bool on)
+ }
+ 
+ static int32_t snd_vol = -1;                    /* percent, from audio_vol (default 0: silent at start) */
++static int32_t snd_q15 = -1;                    /* the iOS volume control as a Q15 factor (mk_audio18.py); -1: not set yet */
++
++extern "C" void
++lv_snd_volume(uint32_t value)
++{
++	int32_t g = 0;
++	if (value > 0) {
++		g = 32768;
++		for (uint32_t i = value; i < 100; i++) {
++			g = g * 30440 / 32768;          /* -0.64 dB a step */
++		}
++	}
++	snd_q15 = g;
++}
+ 
+ extern "C" void
+ lv_snd_play(const int16_t *frames, uint32_t count)
+@@ -1532,8 +1546,13 @@ lv_snd_play(const int16_t *frames, uint32_t count)
+ 			snd_over++;
+ 		}
+ 		uint32_t at = snd_tail++ % SND_FIFO;
+-		snd_fifo[2 * at] = (int16_t)(frames[2 * i] * snd_vol / 100);
+-		snd_fifo[2 * at + 1] = (int16_t)(frames[2 * i + 1] * snd_vol / 100);
++		if (snd_q15 >= 0) {
++			snd_fifo[2 * at] = (int16_t)((frames[2 * i] * snd_q15) >> 15);
++			snd_fifo[2 * at + 1] = (int16_t)((frames[2 * i + 1] * snd_q15) >> 15);
++		} else {
++			snd_fifo[2 * at] = (int16_t)(frames[2 * i] * snd_vol / 100);
++			snd_fifo[2 * at + 1] = (int16_t)(frames[2 * i + 1] * snd_vol / 100);
++		}
+ 	}
+ 	IOLockUnlock(snd_lock);
+ }
