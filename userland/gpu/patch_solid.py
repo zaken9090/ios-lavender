@@ -29,6 +29,8 @@ SOLID = r'''/*
 #define GL_ACTIVE_UNIFORMS              0x8b86
 #define GL_FLOAT_MAT4                   0x8b5c
 #define LV_GL_SRC_ALPHA                 0x0302
+#define LV_GL_STENCIL_TEST              0x0b90
+#define LV_GL_DEPTH_TEST                0x0b71
 static int solid_on = 1;
 static unsigned solid_skipped, solid_cleared;
 static signed char colour_only[2048];          /* per program: 0 not looked at, 1 colour only, -1 not */
@@ -93,7 +95,7 @@ solid_draw(struct eagl *e, GLenum mode, GLsizei count, GLenum type, const void *
 
 	if (!solid_on || mode != GL_TRIANGLES || count != 6 || type != GL_UNSIGNED_SHORT || indices == NULL ||
 	    e->unclear != 0 || e->arrays[0].type != GL_FLOAT || e->arrays[0].size < 2 || e->arrays[1].size < 4 ||
-	    !program_colour_only(e->program) || glIsEnabled(GL_STENCIL_TEST) || glIsEnabled(GL_DEPTH_TEST)) {
+	    !program_colour_only(e->program) || glIsEnabled(LV_GL_STENCIL_TEST) || glIsEnabled(LV_GL_DEPTH_TEST)) {
 		return 0;
 	}
 	for (int i = 0; i < 6; i++) {
