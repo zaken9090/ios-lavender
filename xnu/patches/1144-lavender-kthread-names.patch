@@ -1,0 +1,345 @@
+lavender: names for our kernel threads, right stacks in SMT lines (generator: xnu/src/mk_kthreadnames.py)
+
+diff --git a/bsd/dev/redwood_net.c b/bsd/dev/redwood_net.c
+index e7b46fd..0db1164 100644
+--- a/bsd/dev/redwood_net.c
++++ b/bsd/dev/redwood_net.c
+@@ -12,6 +12,7 @@
+  * know of each other. The first link is QEMU's virtio network device (redwood_virtio_net.c).
+  */
+ #include <kern/clock.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <kern/locks.h>
+ #include <kern/thread.h>
+ #include <libkern/libkern.h>
+@@ -363,6 +364,7 @@ redwood_net_attach(const struct redwood_net_link *link)
+ 		    address[1], address[2], address[3], address[4], address[5], net_link_up ? "up" : "down");
+ 	}
+ 	if (kernel_thread_start(net_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "net_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ 	return true;
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 63ff838..58878ce 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -13,6 +13,7 @@
+  * First sample 90 s after start, then every 120 s, 40 samples at most.
+  */
+ #include <sys/param.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <sys/systm.h>
+ #include <sys/proc.h>
+ #include <sys/proc_internal.h>
+@@ -155,6 +156,7 @@ sweet_sample_start(void)
+ {
+ 	thread_t thread;
+ 	if (kernel_thread_start(sweet_sample_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "sweet_sample_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index b0f1700..401b449 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -20,6 +20,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <sys/systm.h>
+ #include <sys/errno.h>
+ #include <kern/clock.h>
+@@ -391,6 +392,7 @@ sweet_touch_init(void)
+ 	pin_setup(lt.scl);
+ 	pin_wr(lt.irq, 0, CFG_PULL_UP | CFG_DRIVE_2MA);    /* GPIO input; the chip pulls it low */
+ 	if (kernel_thread_start(touch_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "touch_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index ef66309..2e9aff0 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -26,6 +26,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <sys/systm.h>
+ #include <sys/buf.h>
+ #include <sys/conf.h>
+@@ -892,6 +893,7 @@ sweet_ufs_init(void)
+ 	sweet_sample_start();
+ 	thread_t gpt_thread;
+ 	if (kernel_thread_start(sweet_gpt_watch, NULL, &gpt_thread) == KERN_SUCCESS) {
++		thread_set_thread_name(gpt_thread, "sweet_gpt_watch");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(gpt_thread);
+ 	}
+ 	/*
+@@ -1044,6 +1046,7 @@ sweet_log_start(void)
+ 		sweet_log_secs = SWEET_LOG_SECS;
+ 	}
+ 	if (kernel_thread_start(sweet_log_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "sweet_log_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 0515925..5f0828c 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -18,6 +18,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <sys/systm.h>
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+@@ -989,6 +990,7 @@ ud_gadget_start(void)
+ 	}
+ 	printf("LV USB: running (DSTS 0x%08x after %d ms), DMA at 0x%llx\n", dwc_rd(DSTS), i, ud.dma_pa);
+ 	if (kernel_thread_start(ud_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "ud_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/bsd/dev/topaz_sta.c b/bsd/dev/topaz_sta.c
+index f2ffed4..e17bfc6 100644
+--- a/bsd/dev/topaz_sta.c
++++ b/bsd/dev/topaz_sta.c
+@@ -5,6 +5,7 @@
+  * Wi-Fi interface and Settings can list what the scans hear. Joining is not there yet.
+  */
+ #include <kern/thread.h>
++extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <libkern/libkern.h>
+ #include <pexpert/pexpert.h>
+ #include <sys/errno.h>
+@@ -212,6 +213,7 @@ sta_ready(void)
+ {
+ 	thread_t thread;
+ 	if (kernel_thread_start(sta_bring_up, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "sta_bring_up");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/LavenderAudio.cpp b/iokit/Kernel/arm/LavenderAudio.cpp
+index 08b6b1d..ecf51a7 100644
+--- a/iokit/Kernel/arm/LavenderAudio.cpp
++++ b/iokit/Kernel/arm/LavenderAudio.cpp
+@@ -3,6 +3,7 @@
+  * A1: census - PM660L analog codec ids over SPMI, the speaker amplifier on I2C6 (GPIO 22/23).
+  */
+ #include <IOKit/IOLib.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ #include <kern/thread.h>
+ #include <pexpert/pexpert.h>
+ 
+@@ -365,6 +366,7 @@ lv_audio_start(void)
+ 	}
+ 	started = true;
+ 	if (kernel_thread_start(audio_thread, NULL, &t) == KERN_SUCCESS) {
++		thread_set_thread_name(t, "audio_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(t);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/LavenderBT.cpp b/iokit/Kernel/arm/LavenderBT.cpp
+index 8fde57d..74de0d8 100644
+--- a/iokit/Kernel/arm/LavenderBT.cpp
++++ b/iokit/Kernel/arm/LavenderBT.cpp
+@@ -3,6 +3,7 @@
+  * Polled UARTDM v1.4 (Linux msm_serial.c), power-up of a WCN399x (Linux hci_qca.c, btqca.c).
+  */
+ #include <IOKit/IOLib.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLocks.h>
+ #include <IOKit/IOService.h>
+@@ -949,6 +950,7 @@ lv_bt_start(void)
+ 	started = true;
+ 	bt_olyhal();
+ 	if (kernel_thread_start(bt_thread, NULL, &t) == KERN_SUCCESS) {
++		thread_set_thread_name(t, "bt_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(t);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/LavenderIOAudio2.cpp b/iokit/Kernel/arm/LavenderIOAudio2.cpp
+index 0514939..3a338ad 100644
+--- a/iokit/Kernel/arm/LavenderIOAudio2.cpp
++++ b/iokit/Kernel/arm/LavenderIOAudio2.cpp
+@@ -4,6 +4,7 @@
+  * IOAudio2Family: the classes carry the family's names, which is what matching and IOObjectConformsTo test.
+  */
+ #include <IOKit/IOService.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ #include <IOKit/IOUserClient.h>
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <IOKit/IOLib.h>
+@@ -276,6 +277,7 @@ IOAudio2Device::startIO()
+ 		setProperty("is running", kOSBooleanTrue);
+ 		thread_t t;
+ 		if (kernel_thread_start(engineMain, this, &t) == KERN_SUCCESS) {
++			thread_set_thread_name(t, "engineMain");      /* lavender: mk_kthreadnames.py */
+ 			thread_deallocate(t);
+ 		} else {
+ 			running = false;
+diff --git a/iokit/Kernel/arm/LavenderThermal.cpp b/iokit/Kernel/arm/LavenderThermal.cpp
+index 9af6a81..1c06df0 100644
+--- a/iokit/Kernel/arm/LavenderThermal.cpp
++++ b/iokit/Kernel/arm/LavenderThermal.cpp
+@@ -2,6 +2,7 @@
+  * lavender: SoC temperature log (xnu/src/mk_thermal1.py). TSENS v2 TM at 0x10AE000, read only.
+  */
+ #include <IOKit/IOLib.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ #include <kern/thread.h>
+ #include <pexpert/pexpert.h>
+ 
+@@ -107,6 +108,7 @@ lv_thermal_start(void)
+ 		return;
+ 	}
+ 	if (kernel_thread_start(thermal_thread, NULL, &t) == KERN_SUCCESS) {
++		thread_set_thread_name(t, "thermal_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(t);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/SweetBusy.cpp b/iokit/Kernel/arm/SweetBusy.cpp
+index 61fc10c..f77d7ce 100644
+--- a/iokit/Kernel/arm/SweetBusy.cpp
++++ b/iokit/Kernel/arm/SweetBusy.cpp
+@@ -4,6 +4,7 @@
+  * quiesce before it names network interfaces, and everyone who lists interfaces waits for that.
+  */
+ #include <pexpert/arm64/board_config.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ 
+ #if defined(SWEET)
+ #include <IOKit/IOLib.h>
+@@ -46,6 +47,7 @@ sweet_busy_init(void)
+ 		return;
+ 	}
+ 	if (kernel_thread_start(sweet_busy_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "sweet_busy_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index bfa81f8..6f6b012 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -35,6 +35,7 @@
+  * the first swap on (it still reaches the persistent log; panics draw).
+  */
+ #include "SweetSurface.h"
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ 
+ extern "C" int sweet_console_muted;     /* osfmk/console/serial_console.c */
+ extern "C" void sweet_console_retarget(vm_offset_t va);   /* osfmk/console/video_console.c */
+@@ -607,6 +608,7 @@ AppleCLCD::start(IOService *provider)
+ 	if (!(PE_parse_boot_argn("sweetfb_sync", &sync, sizeof(sync)) && sync != 0) && (fQLock = IOLockAlloc()) != NULL) {
+ 		thread_t thread;
+ 		if (kernel_thread_start(&AppleCLCD::presenterMain, this, &thread) == KERN_SUCCESS) {
++			thread_set_thread_name(thread, "presenterMain");      /* lavender: mk_kthreadnames.py */
+ 			thread_deallocate(thread);
+ 			IOLog("SWEET FB: direct frames through a presenter thread (SwapEnd returns at once)\n");
+ 		} else {
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index b3d2537..c5f9cbd 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -18,6 +18,7 @@
+  * 600 MHz instead of 300.
+  */
+ #include <IOKit/IOLib.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <IOKit/IOSubMemoryDescriptor.h>
+ #include <IOKit/IOLocks.h>
+@@ -1346,6 +1347,7 @@ topaz_adreno_init(void)
+ 	}
+ 	hw_lock = IOLockAlloc();
+ 	if (kernel_thread_start(topaz_adreno_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "topaz_adreno_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index dd47a98..ecde86c 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -14,6 +14,7 @@
+  * if item 443 or 480 exists, refuse.
+  */
+ #include <pexpert/arm64/board_config.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ 
+ #if defined(SWEET)
+ #include <IOKit/IOLib.h>
+@@ -2881,6 +2882,7 @@ topaz_audio_init(void)
+ 	}
+ 	started = true;
+ 	if (kernel_thread_start(topaz_audio_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "topaz_audio_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index aba1abf..8104dca 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -14,6 +14,7 @@
+  * modem must start cold, polling only (no interrupts), no EFS writes.
+  */
+ #include <pexpert/arm64/board_config.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ 
+ #if defined(SWEET)
+ #include <IOKit/IOLib.h>
+@@ -6468,6 +6469,7 @@ topaz_modem_init(void)
+ 	started = true;
+ 	topaz_sta_init();                           /* private: bsd/dev/topaz_sta.c (en0 + Apple80211 for wifid) */
+ 	if (kernel_thread_start(topaz_modem_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "topaz_modem_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index ef62473..853c0ec 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -10,6 +10,7 @@
+  * are untouched.
+  */
+ #include <pexpert/arm64/board_config.h>
++extern "C" void thread_set_thread_name(struct thread *th, const char *name);   /* lavender: mk_kthreadnames.py */
+ 
+ #if defined(SWEET)
+ #include <IOKit/IOLib.h>
+@@ -1185,6 +1186,7 @@ lavender_perf_start(void)
+ {
+ 	thread_t thread;
+ 	if (kernel_thread_start(lavender_perf_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "lavender_perf_thread");      /* lavender: mk_kthreadnames.py */
+ 		thread_deallocate(thread);
+ 	}
+ }
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 40ea59c..d1223c4 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1068,6 +1068,10 @@ lv_kthreads(task_t task)
+ 				top[i].d = d;
+ 				top[i].cont = (uint64_t)VM_KERNEL_ADDRHIDE(thread->continuation);
+ 				top[i].k = 0;
++				bzero(top[i].bt, sizeof(top[i].bt));   /* (mk_kthreadnames.py: not the previous entry's) */
++				if (thread->state & TH_RUN) {
++					top[i].k = 1;                   /* running: no saved stack */
++				}
+ 				if ((thread->state & TH_RUN) == 0 && thread->kernel_stack != 0) {
+ 					struct arm_kernel_saved_state *kss = &((thread_kernel_state_t)thread->machine.kstackptr)->machine.ss;
+ 					vm_offset_t ks = thread->kernel_stack;
