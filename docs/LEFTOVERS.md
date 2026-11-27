@@ -229,3 +229,4 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | userland -O2 | GPU/CPU | eagl.c built -O2 instead of -O1 | GPU hangs, wrong textures, UI stalls (st1, gs0, ka, nz1, pf3, pf6) | reverted to -O1 |
 | patch_solid.py, patch_imageof.py | GPU/CPU | glsolid (first project) and an image_of index | no change in backboardd ms a frame | removed (userland 45999741177) |
 | 1157 | display | sweetfb_gpucopy=1: GPU frames copied by the CPU into our flip buffer (test of "iOS draws into the scanned buffer") | the copy from write-combined GPU memory is far too slow: frames stalled, black screen (gc1) | test inconclusive; remove in the next cleanup |
+| patch_bbdfull.py | display | CA_DISABLE_DIRTY_REGIONS=1 for backboardd (stale keyboard band at the bottom of the App Library, user video 18-58-15) | draws a frame unchanged (26.1 -> 27.0): the variable does not change how CA renders here | removed |
