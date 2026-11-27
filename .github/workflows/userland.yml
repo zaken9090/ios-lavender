@@ -54,6 +54,7 @@ jobs:
           python3 userland/gpu/patch_zero.py work/gpu/eagl.c
           python3 userland/gpu/patch_sumfull.py work/gpu/eagl.c
           python3 userland/gpu/patch_preservelog.py work/gpu/eagl.c
+          python3 userland/gpu/patch_damage.py work/gpu/eagl.c
           python3 userland/gpu/patch_bbdnano.py work/gpu/bbd_wrap.c
           # Mesa patches of this repo (threaded context for OSMesa + a5xx fixes), applied with the base's by mk-mesa-mac.sh
           cp userland/mesa/*.patch work/mesa/
