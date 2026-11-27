@@ -45,6 +45,7 @@ jobs:
           cp userland/gpu/* work/gpu/
           # lavender's own changes to the base sources (each script asserts its anchors)
           python3 userland/gpu/patch_preserve.py work/gpu/eagl.c
+          python3 userland/gpu/patch_nopreserve.py work/gpu/eagl.c
           python3 userland/gpu/patch_seed.py work/gpu/eagl.c
           python3 userland/gpu/patch_order.py work/gpu/eagl.c
           python3 userland/gpu/patch_sysmem.py work/gpu/eagl.c
