@@ -1,0 +1,45 @@
+lavender: presenter sleeps until the panel frame ends before polling the MDP latch (generator: xnu/src/mk_latchsleep.py)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 1ecf887..bfa81f8 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1072,6 +1072,38 @@ AppleCLCD::showDirect(const uint8_t *rec, SweetSurface **heldIn)
+ 		sweet_hold_set(dropped, false);
+ 		uint64_t waited = mach_absolute_time(), wns = 0;  /* (present waits for the GPU too) */
+ 		present(rec);
++		/* lavender: sleep until the panel's frame is nearly over, then look (xnu/src/mk_latchsleep.py) */
++		static int latch_sleep = -1;
++		if (latch_sleep < 0) {
++			latch_sleep = 1;
++			PE_parse_boot_argn("sweetfb_latch_sleep", &latch_sleep, sizeof(latch_sleep));
++		}
++		/* the panel's frame time, measured with INTF_1's frame counter (~6.8 ms: 148 Hz, not fPanelUS) */
++		static uint64_t cal_at;
++		static uint32_t cal_frames, frame_us;
++		if (latch_sleep && fIntf1 != NULL) {
++			uint64_t now = mach_absolute_time(), ns;
++			uint32_t frames = fIntf1[(0x800 + 0x0ac) / 4];
++			if (cal_at == 0) {
++				cal_at = now;
++				cal_frames = frames;
++			} else if (frames - cal_frames >= 300) {
++				absolutetime_to_nanoseconds(now - cal_at, &ns);
++				uint32_t us = (uint32_t)(ns / 1000 / (frames - cal_frames));
++				frame_us = (us >= 4000 && us <= 20000) ? us : 0;
++				cal_at = now;
++				cal_frames = frames;
++			}
++		}
++		if (latch_sleep && frame_us != 0 && fCtl0 != NULL && fVTotal > 100 && (fCtl0[0x18 / 4] & 0x20001) != 0) {
++			uint32_t line = fIntf1[(0x800 + 0x0b0) / 4] & 0xffff;
++			if (line < fVTotal) {
++				uint32_t left = (uint32_t)((uint64_t)(fVTotal - line) * frame_us / fVTotal);
++				if (left > 400 && left < 20000) {
++					IODelay(left - 200);
++				}
++			}
++		}
+ 		for (int t = 0; fCtl0 != NULL && t < 250 && (fCtl0[0x18 / 4] & 0x20001) != 0; t++) {
+ 			IODelay(100);                           /* until the MDP has latched it */
+ 		}
