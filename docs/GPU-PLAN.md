@@ -169,3 +169,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - Open: app switcher's cards on the left (Phone) are purple, also with glzero=0 (ui_sw0_6_shot);
   the first rows tear for a frame or two when a scroll starts (user saw it on the panel with the bench's
   drag; not caught by lv:shot); home background black for a while after boot until a few lock/unlock.
+- Settings scrolling artefacts found from the user's videos (2026-11-27) and lv:shot during momentum /
+  overscroll jerks: (1) stale bands of old rows = glpreserve's copy of the last frame (2/8 shots; 0/16
+  off) -> patch_nopreserve.py, off by default (glpreserve=1: on); (2) reused cells with stale or
+  half-new pictures ("Код допуску" icon a red striped grid, label a grey smear, 3/8 shots) = the
+  sampled surface sum missed redraws -> patch_sumfull.py, full sum by default (glsumfull=0: sample);
+  0/12 and 0/8 shots after. Userland 46017997725 (nd1): Settings 55.9-57.2 fps slow drag, 0 hangs.
+  tools/ghost.ps1: Settings short drags with shots.
