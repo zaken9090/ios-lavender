@@ -1,0 +1,129 @@
+lavender: one lock for the PMIC bus (phantom volume keys while the metrics read the fuel gauge); LVM takes the GPU clock from its divider (generator: xnu/src/mk_spmilock.py)
+
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+index e279241..e32e608 100644
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -67,8 +67,11 @@ keys_map(struct keys_reg *k, vm_offset_t core, vm_offset_t cnfg)
+ 	printf("SWEET KEYS: ppid %#x -> channel %d\n", k->ppid, found);
+ }
+ 
++extern void lv_spmi_lock(void);          /* bsd/dev/sweet_usb.c (xnu/src/mk_spmilock.py) */
++extern void lv_spmi_unlock(void);
++
+ static bool
+-keys_read(struct keys_reg *k, uint8_t *out)
++keys_read_bus(struct keys_reg *k, uint8_t *out)
+ {
+ 	if (k->ch == 0) {
+ 		return false;
+@@ -90,6 +93,16 @@ keys_read(struct keys_reg *k, uint8_t *out)
+ 	return false;
+ }
+ 
++/* lavender: under the SPMI lock (xnu/src/mk_spmilock.py) */
++static bool
++keys_read(struct keys_reg *k, uint8_t *out)
++{
++	lv_spmi_lock();
++	bool ok = keys_read_bus(k, out);
++	lv_spmi_unlock();
++	return ok;
++}
++
+ static void
+ keys_wait(void)
+ {
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index ea6e57f..8e56cc2 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -30,6 +30,7 @@ extern void thread_set_thread_name(struct thread *th, const char *name);       /
+ #include <vm/vm_kern.h>
+ #include <pexpert/pexpert.h>
+ #include <pexpert/device_tree.h>
++#include <kern/locks.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+@@ -444,9 +445,31 @@ spmi_channel(unsigned peripheral)
+ 	return found;
+ }
+ 
+-/* One byte of PMIC 0 at addr. Returns 0 on success. */
++/*
++ * lavender: one SPMI transaction at a time, whoever asks (xnu/src/mk_spmilock.py). Two at once through
++ * different channels made one fail or return a wrong byte (phantom volume keys while the metrics read
++ * the fuel gauge).
++ */
++static LCK_GRP_DECLARE(lv_spmi_grp, "lv_spmi");
++static LCK_MTX_DECLARE(lv_spmi_mtx, &lv_spmi_grp);
++void lv_spmi_lock(void);
++void lv_spmi_unlock(void);
++
++void
++lv_spmi_lock(void)
++{
++	lck_mtx_lock(&lv_spmi_mtx);
++}
++
++void
++lv_spmi_unlock(void)
++{
++	lck_mtx_unlock(&lv_spmi_mtx);
++}
++
++/* One byte of PMIC 0 at addr. Returns 0 on success. With the SPMI lock held. */
+ static int
+-spmi_byte(bool write, unsigned addr, uint8_t *val)
++spmi_byte_bus(bool write, unsigned addr, uint8_t *val)
+ {
+ 	int channel = spmi_channel(addr >> 8);
+ 	if (channel < 0) {
+@@ -486,6 +509,15 @@ spmi_byte(bool write, unsigned addr, uint8_t *val)
+ 	return -3;
+ }
+ 
++static int
++spmi_byte(bool write, unsigned addr, uint8_t *val)
++{
++	lv_spmi_lock();
++	int r = spmi_byte_bus(write, addr, val);
++	lv_spmi_unlock();
++	return r;
++}
++
+ /*
+  * lavender: one PMIC byte for other drivers (xnu/src/mk_wled.c): addr = slave << 16 | register.
+  * 0 on success, -4 when the peripheral's channel is not the application CPU's to write.
+diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
+index 4439fc2..e27a034 100644
+--- a/iokit/Kernel/arm/LavenderMetrics.cpp
++++ b/iokit/Kernel/arm/LavenderMetrics.cpp
+@@ -51,6 +51,7 @@ extern unsigned int lvm_level __asm("_memorystatus_level");
+ extern "C" bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
+ 
+ static volatile uint32_t *tm, *pll_gold, *pll_silver, *gold_rcg, *apcs_common;
++static volatile uint32_t *gfx_cc;               /* GPU clock controller page with the gfx3d RCG (xnu/src/mk_spmilock.py) */
+ static uint32_t period_ms = 1000, khz_every = 10, top_n = 6;
+ 
+ /* ---- cores: busy share from the tick counters ---- */
+@@ -336,6 +337,10 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 		uint32_t mhz = 0, sub = 0, rec = 0, fail = 0;
+ 		if (redwood_gpu_stats(&busy, &mhz, &sub, &rec, &fail) && mhz != 0) {
+ 			uint64_t share = 0;
++			uint32_t cfg = gfx_cc != NULL ? gfx_cc[0x74 / 4] : 0;
++			if (((cfg >> 8) & 7) == 5) {
++				mhz = 1200 / ((cfg & 0x1f) + 1);        /* GPLL0 600 MHz, divider (d + 1) / 2 */
++			}
+ 			if (gpu_had && ns != 0 && busy >= gpu_before) {
+ 				share = (busy - gpu_before) * 100000 / ((uint64_t)mhz * ns);    /* cycles / (MHz x ns / 1000) in percent */
+ 			}
+@@ -402,6 +407,7 @@ lv_metrics_start(void)
+ 	pll_silver = (volatile uint32_t *)ml_io_map(PLL_SILVER_PA, 0x1000);
+ 	gold_rcg = (volatile uint32_t *)ml_io_map(GOLD_RCG_PA, 0x1000);
+ 	apcs_common = (volatile uint32_t *)ml_io_map(APCS_COMMON_PA, 0x1000);
++	gfx_cc = (volatile uint32_t *)ml_io_map(0x05066000ull, 0x1000);
+ 	if (tm == NULL || pll_gold == NULL || pll_silver == NULL || gold_rcg == NULL || apcs_common == NULL) {
+ 		IOLog("LVM: map failed\n");
+ 		return;
