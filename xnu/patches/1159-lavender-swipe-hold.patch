@@ -1,0 +1,30 @@
+lavender: lv:swipe with an optional HOLD at the end (generator: xnu/src/mk_swipehold.py)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index c992765..088dcde 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -696,9 +696,10 @@ ud_numbers(const char *arg, int *v, int n)
+ static void
+ ud_touch(const char *arg, bool swipe)
+ {
+-	int v[5] = {0, 0, 0, 0, 0};
++	int v[6] = {0, 0, 0, 0, 0, 0};
+ 	int need = swipe ? 5 : 2;
+-	if (ud_numbers(arg, v, need) != need || v[0] >= 1080 || v[1] >= 2340 ||
++	int got = ud_numbers(arg, v, swipe ? 6 : 2);      /* lavender: an optional HOLD (xnu/src/mk_swipehold.py) */
++	if (got < need || v[0] >= 1080 || v[1] >= 2340 ||
+ 	    (swipe && (v[2] >= 1080 || v[3] >= 2340 || v[4] > 5000))) {
+ 		printf("LV USB: bad %s\n", swipe ? "lv:swipe" : "lv:tap");
+ 		return;
+@@ -719,6 +720,10 @@ ud_touch(const char *arg, bool swipe)
+ 			ud_sleep_ms((unsigned)step_ms);
+ 			sweet_hid_touch(9, 1, v[0] + (v[2] - v[0]) * i / steps, v[1] + (v[3] - v[1]) * i / steps);
+ 		}
++		for (int held = 0; got >= 6 && held < v[5] && held < 3000; held += 8) {
++			ud_sleep_ms(8);
++			sweet_hid_touch(9, 1, v[2], v[3]);
++		}
+ 		sweet_hid_touch(9, 0, v[2], v[3]);
+ 	} else {
+ 		ud_sleep_ms(80);
