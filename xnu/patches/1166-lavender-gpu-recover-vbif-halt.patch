@@ -1,0 +1,52 @@
+lavender: GPU recovery halts the bus interface before the reset and tries twice (generator: xnu/src/mk_gpurecover2.py)
+
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 57c3e45..2a7aa6c 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -1317,13 +1317,28 @@ redwood_gpu_recover(void)
+ 	if (!ready) {
+ 		return false;
+ 	}
++	bool halted = false;
++	int tries = 0;
++
+ 	IOLockLock(hw_lock);
+-	gpu_wr(0x43, 1);                                /* RBBM_SW_RESET_CMD */
+-	(void)gpu_rd(0x43);
+-	IODelay(100);
+-	gpu_wr(0x43, 0);
+-	IODelay(100);
+-	ok = cp_start();
++	do {
++		/* lavender (mk_gpurecover2.py): no reset with transactions on the bus - halt the VBIF first, as KGSL */
++		gpu_wr(0x3080, 0xF);                    /* VBIF_XIN_HALT_CTRL0 */
++		halted = false;
++		for (int i = 0; i < 2000 && !halted; i++) {
++			halted = (gpu_rd(0x3081) & 0xF) == 0xF;         /* VBIF_XIN_HALT_CTRL1: acknowledged */
++			if (!halted) {
++				IODelay(10);
++			}
++		}
++		gpu_wr(0x43, 1);                        /* RBBM_SW_RESET_CMD */
++		(void)gpu_rd(0x43);
++		IODelay(tries == 0 ? 100 : 2000);
++		gpu_wr(0x43, 0);
++		IODelay(tries == 0 ? 100 : 2000);
++		gpu_wr(0x3080, 0);
++		ok = cp_start();
++	} while (!ok && ++tries < 2);
+ 	lv_gpu_recovered += ok ? 1 : 0;                 /* lavender: counted for the LVM line (mk_metrics.py) */
+ 	lv_gpu_recover_failed += ok ? 0 : 1;
+ 	if (ok && mem.va != NULL) {
+@@ -1331,8 +1346,8 @@ redwood_gpu_recover(void)
+ 		sweet_dcache_clean((vm_offset_t)mem.va, 64);
+ 	}
+ 	IOLockUnlock(hw_lock);
+-	IOLog("TopazGPU: recovery %s: RBBM_STATUS %08x rptr %u wptr %u fence %u\n", ok ? "done" : "FAILED", gpu_rd(0x4f5),
+-	    gpu_rd(0x806), wptr % RB_DWORDS, seqno);
++	IOLog("TopazGPU: recovery %s: RBBM_STATUS %08x rptr %u wptr %u fence %u (bus halt %s, try %d)\n", ok ? "done" : "FAILED",
++	    gpu_rd(0x4f5), gpu_rd(0x806), wptr % RB_DWORDS, seqno, halted ? "acknowledged" : "NOT acknowledged", tries + (ok ? 1 : 0));
+ 	return ok;
+ }
+ 
