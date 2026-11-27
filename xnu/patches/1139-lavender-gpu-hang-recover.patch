@@ -1,0 +1,179 @@
+lavender: GPU hang - full a5xx state at a hang, recovery as Linux a5xx_recover (gpu_recover=0: off) (generator: xnu/src/mk_gpuhang1.py)
+
+diff --git a/iokit/Kernel/arm/RedwoodGPU.cpp b/iokit/Kernel/arm/RedwoodGPU.cpp
+index 62263a6..3d87b71 100644
+--- a/iokit/Kernel/arm/RedwoodGPU.cpp
++++ b/iokit/Kernel/arm/RedwoodGPU.cpp
+@@ -69,6 +69,7 @@ bool redwood_gpu_done(uint32_t fence);
+ uint32_t redwood_gpu_last(void);
+ void redwood_gpu_worked(uint64_t * microseconds, uint32_t * submissions, uint32_t by[7]);
+ void redwood_gpu_report(const char * why);
++bool redwood_gpu_recover(void);
+ void redwood_gpu_stop(void);
+ 
+ void RedwoodGPUStart(void);
+@@ -195,6 +196,27 @@ static struct {
+ 	uint64_t making;                        /* ... and the time it took to make the others */
+ } gGPUStat;
+ 
++/*
++ * lavender (mk_gpuhang1.py): the GPU stopped answering: report it, then reset it and go on as Linux
++ * a5xx_recover() does (boot-arg gpu_recover=0: stay stopped; at most 20 a boot). With the lock held.
++ */
++static uint32_t gGPURecovered;
++
++static void
++gpuHung(const char * why)
++{
++	uint32_t recover = 1;
++
++	gGPUReported = true;
++	redwood_gpu_report(why);
++	PE_parse_boot_argn("gpu_recover", &recover, sizeof(recover));
++	if (recover != 0 && gGPURecovered < 20 && redwood_gpu_recover()) {
++		gGPURecovered++;
++		gGPUReported = false;
++		IOLog("RedwoodGPU: the GPU was reset (%u so far)\n", gGPURecovered);
++	}
++}
++
+ /* Wait for the 3D core to be done with submission `fence`; with the lock held, which is let go of while waiting. */
+ static bool
+ gpuWait(uint32_t fence, uint64_t milliseconds)
+@@ -218,8 +240,7 @@ gpuWait(uint32_t fence, uint64_t milliseconds)
+ 		IOLockLock(gGPULock);
+ 	}
+ 	if (milliseconds >= 1000 && !gGPUReported) {
+-		gGPUReported = true;
+-		redwood_gpu_report("no answer");
++		gpuHung("no answer");
+ 	}
+ 	return false;
+ }
+@@ -1091,6 +1112,12 @@ RedwoodGPUUserClient::submit(struct msm_gem_submit * request)
+ 		words[count++] = cmds[i].size / 4;
+ 	}
+ 	request->fence = redwood_gpu_submit(addresses, words, count);
++	if (request->fence == 0 && !gGPUReported) {
++		gpuHung("the ring is full");
++		if (!gGPUReported) {
++			request->fence = redwood_gpu_submit(addresses, words, count);   /* once more, on the reset GPU */
++		}
++	}
+ 	if (gpu_log && request->fence != 0) {
+ 		/* "tl: Q FENCE at US: N buffers, B of 4 MB or more, W words of commands": what was given (tl: q: what it took) */
+ 		uint32_t big = 0, all_words = 0;
+@@ -1127,10 +1154,6 @@ RedwoodGPUUserClient::submit(struct msm_gem_submit * request)
+ 		}
+ 	}
+ 	reap();
+-	if (request->fence == 0 && !gGPUReported) {
+-		gGPUReported = true;
+-		redwood_gpu_report("the ring is full");
+-	}
+ 	if (fSubmits++ < 4) {
+ 		IOLog("RedwoodGPU: submission %u: %u command buffers, the first at %#llx, %u words\n", request->fence, count,
+ 		    addresses[0], words[0]);
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index e684d39..b3d2537 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -51,6 +51,7 @@ bool redwood_gpu_done(uint32_t fence);
+ uint32_t redwood_gpu_last(void);
+ void redwood_gpu_worked(uint64_t *microseconds, uint32_t *submissions, uint32_t by[7]);
+ void redwood_gpu_report(const char *why);
++bool redwood_gpu_recover(void);
+ void redwood_gpu_stop(void);
+ void redwood_tl(const char *format, ...) __printflike(1, 2);
+ uint32_t gpu_log;
+@@ -1198,6 +1199,53 @@ redwood_gpu_submit(const uint64_t *addresses, const uint32_t *words, uint32_t co
+ 	return fence;
+ }
+ 
++/* n dwords at GPU address va (identity SMMU only), 8 a line */
++static void
++hang_words(const char *why, const char *what, uint64_t va, uint32_t n)
++{
++	if (!gpu_identity || va == 0 || (va & 3) || n == 0) {
++		return;
++	}
++	uint64_t page = va & ~0xfffull;
++	vm_offset_t m = ml_io_map((vm_offset_t)page, 0x2000);
++	if (m == 0) {
++		return;
++	}
++	volatile uint32_t *w = (volatile uint32_t *)(m + (va - page));
++	uint32_t most = (uint32_t)((0x2000 - (va - page)) / 4);
++	n = n < most ? n : most;
++	for (uint32_t i = 0; i < n; i += 8) {
++		IOLog("TopazGPU: %s: %s+%03x: %08x %08x %08x %08x %08x %08x %08x %08x\n", why, what, i, w[i], w[i + 1], w[i + 2],
++		    w[i + 3], w[i + 4], w[i + 5], w[i + 6], w[i + 7]);
++	}
++}
++
++static void
++hang_dump(const char *why, uint64_t ib1)
++{
++	uint32_t on = 1;
++	(void)PE_parse_boot_argn("gpu_hangdump", &on, sizeof(on));
++	if (on == 0) {
++		return;
++	}
++	uint64_t ib2 = gpu_rd(0xb22) | ((uint64_t)gpu_rd(0xb23) << 32);
++	uint32_t rptr = gpu_rd(0x806);
++	IOLog("TopazGPU: %s: IB2 %llx rem %u STATUS3 %08x INT0 %08x CP_INT %08x SCRATCH %08x %08x %08x %08x\n", why, ib2,
++	    gpu_rd(0xb24), gpu_rd(0x530), gpu_rd(0x4e1), gpu_rd(0xb18), gpu_rd(0xb78), gpu_rd(0xb79), gpu_rd(0xb7a), gpu_rd(0xb7b));
++	if (ring.va != NULL) {
++		/* the ring before the CP's read pointer: the IB packet it took last (with its size) */
++		volatile uint32_t *r = (volatile uint32_t *)ring.va;
++		for (uint32_t row = 0; row < 3; row++) {
++			uint32_t at = (rptr + RB_DWORDS - 16 + row * 8) % RB_DWORDS;
++			IOLog("TopazGPU: %s: ring@%u: %08x %08x %08x %08x %08x %08x %08x %08x\n", why, at, r[at], r[(at + 1) % RB_DWORDS],
++			    r[(at + 2) % RB_DWORDS], r[(at + 3) % RB_DWORDS], r[(at + 4) % RB_DWORDS], r[(at + 5) % RB_DWORDS],
++			    r[(at + 6) % RB_DWORDS], r[(at + 7) % RB_DWORDS]);
++		}
++	}
++	hang_words(why, "IB1", ib1, 352);
++	hang_words(why, "IB2", ib2, 64);
++}
++
+ void
+ redwood_gpu_report(const char *why)
+ {
+@@ -1206,6 +1254,36 @@ redwood_gpu_report(const char *why)
+ 	    seqno, mem.va ? *(volatile uint32_t *)mem.va : 0, gpu_rd(0x806), wptr % RB_DWORDS, gpu_rd(0x4f5),
+ 	    gpu_rd(0xb1a), ib1, gpu_rd(0xb21));
+ 	smmu_fault(why);
++	hang_dump(why, ib1);                            /* mk_gpuhang1.py */
++}
++
++/*
++ * lavender (mk_gpuhang1.py): a GPU that stopped answering stayed stopped and the UI froze. As Linux
++ * a5xx_recover(): software reset, the CP started again; what was given before is written as done.
++ */
++bool
++redwood_gpu_recover(void)
++{
++	bool ok;
++
++	if (!ready) {
++		return false;
++	}
++	IOLockLock(hw_lock);
++	gpu_wr(0x43, 1);                                /* RBBM_SW_RESET_CMD */
++	(void)gpu_rd(0x43);
++	IODelay(100);
++	gpu_wr(0x43, 0);
++	IODelay(100);
++	ok = cp_start();
++	if (ok && mem.va != NULL) {
++		*(volatile uint32_t *)mem.va = seqno;   /* everything given before is over */
++		sweet_dcache_clean((vm_offset_t)mem.va, 64);
++	}
++	IOLockUnlock(hw_lock);
++	IOLog("TopazGPU: recovery %s: RBBM_STATUS %08x rptr %u wptr %u fence %u\n", ok ? "done" : "FAILED", gpu_rd(0x4f5),
++	    gpu_rd(0x806), wptr % RB_DWORDS, seqno);
++	return ok;
+ }
+ 
+ void
