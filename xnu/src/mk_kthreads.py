@@ -38,7 +38,7 @@ static struct { uint64_t tid; uint64_t last; } lv_kt[512];
 static void
 lv_kthreads(task_t task)
 {
-	struct { uint64_t tid, d; uint64_t cont, k; char nm[24]; } top[12];
+	struct { uint64_t tid, d; uint64_t cont, k; uint64_t bt[8]; char nm[24]; } top[12];
 	thread_t thread;
 	uint64_t ns;
 
@@ -68,7 +68,21 @@ lv_kthreads(task_t task)
 				top[i].cont = (uint64_t)VM_KERNEL_ADDRHIDE(thread->continuation);
 				top[i].k = 0;
 				if ((thread->state & TH_RUN) == 0 && thread->kernel_stack != 0) {
-					top[i].k = (uint64_t)VM_KERNEL_ADDRHIDE(((thread_kernel_state_t)thread->machine.kstackptr)->machine.ss.lr);
+					struct arm_kernel_saved_state *kss = &((thread_kernel_state_t)thread->machine.kstackptr)->machine.ss;
+					vm_offset_t ks = thread->kernel_stack;
+					uint64_t kfp = kss->fp;
+					top[i].k = (uint64_t)VM_KERNEL_ADDRHIDE(kss->lr);
+					for (int f = 0; f < 8; f++) {
+						if (kfp < ks || kfp + 16 > ks + kernel_stack_size || (kfp & 7) != 0) {
+							break;
+						}
+						uint64_t next = ((uint64_t *)kfp)[0], lr = ((uint64_t *)kfp)[1];
+						top[i].bt[f] = (uint64_t)VM_KERNEL_ADDRHIDE(lr);
+						if (lr == 0 || next <= kfp) {
+							break;
+						}
+						kfp = next;
+					}
 				}
 				strlcpy(top[i].nm, nm, sizeof(top[i].nm));
 				break;
@@ -78,8 +92,9 @@ lv_kthreads(task_t task)
 	task_unlock(task);
 	for (int i = 0; i < 12 && top[i].d != 0; i++) {
 		absolutetime_to_nanoseconds(top[i].d, &ns);
-		printf("SMT kernel_task tid %llu ms %llu name %s cont 0x%llx k 0x%llx\\n", top[i].tid, ns / 1000000,
-		    top[i].nm[0] ? top[i].nm : "-", top[i].cont, top[i].k);
+		printf("SMT kernel_task tid %llu ms %llu name %s cont 0x%llx k 0x%llx bt 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\\n",
+		    top[i].tid, ns / 1000000, top[i].nm[0] ? top[i].nm : "-", top[i].cont, top[i].k,
+		    top[i].bt[0], top[i].bt[1], top[i].bt[2], top[i].bt[3], top[i].bt[4], top[i].bt[5], top[i].bt[6], top[i].bt[7]);
 	}
 }
 
