@@ -1,0 +1,43 @@
+lavender: touch reads 32 bytes (5 fingers), bus speed boot-arg (generator: xnu/src/mk_touchshort.py)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index f8564a0..214623c 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -48,7 +48,8 @@ void sweet_touch_init(void);
+ #define NVT_EVENT_BUF   0x21c00u
+ #define NVT_REPORT_LEN  65u
+ #define NVT_FINGERS     10u
+-#define HALF_US         2u              /* half an SCL period */
++static uint32_t lv_half_us = 2;         /* half an SCL period; boot-arg sweettouch_half_us (xnu/src/mk_touchshort.py) */
++#define HALF_US         lv_half_us
+ 
+ static struct {
+ 	vm_offset_t sda, scl, irq;      /* the pins' register blocks */
+@@ -360,6 +361,16 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 	int edge = 1;
+ 	unsigned quiet = 0, edges = 0;
+ 	PE_parse_boot_argn("sweettouch_edge", &edge, sizeof(edge));
++	/* lavender: 32 bytes (fingers 1-5) and the bus speed (xnu/src/mk_touchshort.py) */
++	uint32_t lv_report_len = 32;
++	PE_parse_boot_argn("sweettouch_len", &lv_report_len, sizeof(lv_report_len));
++	if (lv_report_len < 8 || lv_report_len > NVT_REPORT_LEN) {
++		lv_report_len = NVT_REPORT_LEN;
++	}
++	PE_parse_boot_argn("sweettouch_half_us", &lv_half_us, sizeof(lv_half_us));
++	if (lv_half_us == 0 || lv_half_us > 10) {
++		lv_half_us = 2;
++	}
+ 	/* lavender: with a finger down, each report as its edge comes (xnu/src/mk_touchpace.py) */
+ 	uint32_t down_ms = 1, down_max = 30, since = 0, sessions = 0, session_reports = 0;
+ 	uint64_t session_start = 0;
+@@ -401,7 +412,8 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 			quiet = 0;
+ 			since = 0;
+ 			uint64_t t_read = mach_absolute_time();
+-			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
++			bzero(r, sizeof(r));            /* lavender: unread finger slots are empty (mk_touchshort.py) */
++			if (i2c_read(NVT_ADDR, 0x00, r, lv_report_len) == 0) {
+ 				lt.reports++;
+ 				if (trace) {
+ 					uint64_t t_end = mach_absolute_time(), ns_now, ns_gap = 0, ns_read;
