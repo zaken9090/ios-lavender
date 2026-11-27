@@ -1,0 +1,22 @@
+lavender: audio A4b - SMMU fault state after the tone (generator: xnu/src/mk_audio13.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index ae35953..e7f76ed 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1744,6 +1744,15 @@ a4b_play(void)
+ 		}
+ 	}
+ 	a4_playing = false;
++	{
++		uint32_t id1 = lpr(0x24), psize = (id1 & (1u << 31)) ? 0x10000 : 0x1000, npage = 1u << (((id1 >> 28) & 7) + 1);
++		uint32_t cbp = npage * psize;           /* bank 0 */
++		LOG("A4b SMMU after: GFSR %08x GFSYNR0 %08x GFSYNR1 %08x | CB0 FSR %08x FAR %08x%08x FSYNR0 %08x SCTLR %08x | SMR0 %08x S2CR0 %08x",
++		    lpr(0x48), lpr(0x50), lpr(0x54), lpr(cbp + 0x58), lpr(cbp + 0x64), lpr(cbp + 0x60), lpr(cbp + 0x68), lpr(cbp),
++		    lpr(0x800), lpr(0xC00));
++		const int16_t *s16 = (const int16_t *)a4_va;
++		LOG("A4b buffer 0 starts: %d %d %d %d %d %d %d %d", s16[0], s16[1], s16[2], s16[3], s16[4], s16[5], s16[6], s16[7]);
++	}
+ 	LOG("A4b: %u WRITE_DONE (%u with an error status), 50 a second expected", a4_done, a4_bad);
+ 	(void)apr_call("ASM pause", 7, 0x0101, 0x0101, 0x00010BD3u, NULL, 0, &st);
+ close_adm:
