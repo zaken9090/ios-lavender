@@ -1,0 +1,25 @@
+lavender: boot-arg sweetfb_gpucopy=1, GPU frames shown from a kernel copy (test) (generator: xnu/src/mk_gpucopy.py)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 1590c05..4eb2030 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -1606,7 +1606,17 @@ AppleCLCD::directPresent(const uint8_t *rec)
+ 				 * next frame in this surface at once, so scanning it directly let
+ 				 * the panel show frames half drawn. Cached to cached, a few ms.
+ 				 */
+-				if (s->gpuPool) {
++				/* lavender: sweetfb_gpucopy=1 - copied and shown from our buffer (xnu/src/mk_gpucopy.py) */
++				static int gpucopy = -1;
++				if (gpucopy < 0) {
++					gpucopy = 0;
++					PE_parse_boot_argn("sweetfb_gpucopy", &gpucopy, sizeof(gpucopy));
++				}
++				if (s->gpuPool && gpucopy && fFlip[0] != NULL) {
++					uint32_t cx = s->width > fWidth ? (s->width - fWidth) / 2 : 0, cy = s->height > fHeight ? (s->height - fHeight) / 2 : 0;
++					fScaleWant = false;
++					flipFrom((const uint8_t *)(va + s->offset + (uint64_t)cy * s->bytesPerRow + (uint64_t)cx * 4), s->bytesPerRow);
++				} else if (s->gpuPool) {
+ 					/* GPU pool memory (write-combined): the MDP scans the surface itself, no copy */
+ 					fScaleWant = scaled;
+ 					scanFrom(pa, s->bytesPerRow);
