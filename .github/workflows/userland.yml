@@ -50,6 +50,7 @@ jobs:
           python3 userland/gpu/patch_order.py work/gpu/eagl.c
           python3 userland/gpu/patch_sysmem.py work/gpu/eagl.c
           python3 userland/gpu/patch_sum.py work/gpu/eagl.c
+          python3 userland/gpu/patch_sumfull.py work/gpu/eagl.c
           python3 userland/gpu/patch_tc.py work/gpu/eagl.c
           python3 userland/gpu/patch_blurcolour.py work/gpu/eagl.c
           python3 userland/gpu/patch_zero.py work/gpu/eagl.c
