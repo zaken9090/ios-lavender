@@ -159,3 +159,13 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   when its edge comes (was every 8 ms on its own clock: uneven steps, judder with a slow real finger).
 - glzero (patch_zero.py, first project 125fe46): 2 GPU hangs then a stall in the first boot (z1); with
   glzero=0 stable. Off until reworked (the shade still flickers).
+- Touch was the finger judder (2026-11-27): one report read took ~53 ms (delay() in the bit-banged I2C
+  blocked for tens of us per wait) -> ~17 reports/s. 1153 spins the waits (4.2 ms a read), 1154 reads
+  32 bytes (fingers 1-5) + sweettouch_half_us, 1155 half_us 1 by default: 1.3 ms a read, a report every
+  8.3 ms, 0 bus errors in 1745 reads. User: Settings scroll by finger without judder or tearing (sw0).
+- glzero v2 (zeros uploaded instead of a framebuffer clear): no hangs (tt1, zk); with glzero=0 the home
+  screen flashes black (user, sw0) - keep glzero on. The switcher had flickered on the build without
+  it; with v2 no flicker (user).
+- Open: app switcher's cards on the left (Phone) are purple, also with glzero=0 (ui_sw0_6_shot);
+  the first rows tear for a frame or two when a scroll starts (user saw it on the panel with the bench's
+  drag; not caught by lv:shot); home background black for a while after boot until a few lock/unlock.
