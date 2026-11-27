@@ -162,7 +162,7 @@ sub('''		glBlitFramebuffer(0, 0, image->width, image->height, 0, 0, image->width
 				}
 			}
 			if (preserve_damage && preserve_log > 0) {
-				say("redwood-gl: preserve %s%s: %d rects, first %d,%d to %d,%d\n", boxed ? "boxed" : "unboxed", d != NULL && d->all ? " all" : "",
+				say("redwood-gl: preserve %s%s: %d rects, first %d,%d to %d,%d\\n", boxed ? "boxed" : "unboxed", d != NULL && d->all ? " all" : "",
 				    rects, rects ? rect[0][0] : 0, rects ? rect[0][1] : 0, rects ? rect[0][2] : 0, rects ? rect[0][3] : 0);
 			}
 		}
@@ -196,7 +196,7 @@ sub('''	if (image->width < 1000 || image->height < 2000) {
 		}
 		if (t0 - said >= 1000000) {
 			if (said != 0 && frames > 2) {
-				say("redwood-gl: %u display frames, %u began in a surface in use, %u of them let go while waiting\n", frames, busy, freed);
+				say("redwood-gl: %u display frames, %u began in a surface in use, %u of them let go while waiting\\n", frames, busy, freed);
 			}
 			said = t0;
 			frames = busy = freed = 0;
