@@ -1,0 +1,454 @@
+lavender: cleanup 1 - Wi-Fi tries 1056/1081/1082 removed, default-on logs made opt-in (generator: xnu/src/mk_cleanup1.py)
+
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 46e3c0c..63ff838 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -3,7 +3,7 @@
+  *
+  * The phone has no debugger and daemons log nowhere readable. Every
+  * interval a kernel thread prints, for each process named in boot-arg
+- * sweetsample (comma separated, default "SpringBoard,backboardd"; "-" = off)
++ * sweetsample (comma separated, e.g. "SpringBoard,backboardd"; absent or "-" = off)
+  * and for each of its threads, the user pc/lr/sp and a frame-pointer
+  * backtrace as "SMP name[pid] tN pc ... lr ... bt ..." (header line with the
+  * shared region slide and the main binary's mach header, to symbolicate
+@@ -130,9 +130,9 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+ {
+ 	static int chan;
+ 	if (!PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names))) {
+-		strlcpy(sweet_sample_names, "SpringBoard,backboardd", sizeof(sweet_sample_names));
++		return;                                 /* opt-in since mk_cleanup1.py */
+ 	}
+-	if (sweet_sample_names[0] == '-') {
++	if (sweet_sample_names[0] == '-' || sweet_sample_names[0] == 0) {
+ 		return;
+ 	}
+ 	/* lavender: timing from boot-args (xnu/src/mk_samplefast.py) */
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index fdc164e..b0f1700 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -370,7 +370,7 @@ sweet_touch_init(void)
+ 	thread_t thread;
+ 
+ 	PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
+-	lt.diag = 40;
++	lt.diag = 0;
+ 	PE_parse_boot_argn("sweettouchdiag", &lt.diag, sizeof(lt.diag));
+ 	if (!enabled || started) {
+ 		return;
+diff --git a/iokit/Kernel/arm/SweetWatchdog.cpp b/iokit/Kernel/arm/SweetWatchdog.cpp
+index c74c5ee..e301438 100644
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -138,16 +138,17 @@ AppleIPAppenderUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
+ 	}
+ 	bool bb = OSDynamicCast(AppleBaseband, getProvider()) != NULL;
+ 	uint64_t *logged = bb ? &lv_bb_logged : &lv_pdp_logged;
+-	static int verbose = -1;
++	static int verbose = -1, calllog = 0;
+ 	static unsigned calls[2];
+ 	if (verbose < 0) {
+-		uint32_t abp = 0;
++		uint32_t abp = 0, cl = 0;
+ 		verbose = PE_parse_boot_argn("abp", &abp, sizeof(abp)) && abp != 0;
++		calllog = PE_parse_boot_argn("abp_log", &cl, sizeof(cl)) && cl != 0;
+ 	}
+ 	if (verbose > 0 && bb && (selector == 0 || selector == 1 || selector == 6)) {
+ 		lv_abp_power(selector, args->scalarInputCount > 0 ? args->scalarInput[0] : 0);
+ 	}
+-	if (verbose > 0 && calls[bb]++ < 300) {
++	if (calllog > 0 && calls[bb]++ < 300) {
+ 		static const char *const bbn[] = {
+ 			"ResetModem", "PowerOnModem", "EnableModemMux", "GetReset", "4", "5", "PowercycleModem", "7", "EnableModemVBUS", "9",
+ 			"VoteDeviceWake", "GetPMUExtOn", "12", "13", "14", "Identify", "GetDiagReady", "GetFSEraseDone", "GetResetReq",
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+index b449870..aba1abf 100644
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -491,7 +491,6 @@ static void svc_summary(void);
+ static void wlfw_arrive(uint32_t node, uint32_t port);
+ static bool wifi_enabled(void);
+ static bool ce_start(void);
+-static bool wlan_mac_from_persist(void);
+ static void radio_poll(unsigned ms);
+ static void w_rx_native(const uint8_t *f, uint32_t len);
+ static void htt_tx_compl(const uint8_t *p, uint32_t len);
+@@ -803,7 +802,7 @@ static unsigned q_odd;
+ #define PORT_DIAG           0x4010              /* DIAG CNTL, DATA, DCI servers (mk_diagsrv.py) */
+ #define PORT_UIMC           0x4006              /* our QMI client port towards UIM (mk_uimprov.py) */
+ #define PORT_DIAGC          0x4013              /* our DIAG command client (mk_wlanmacnv.py) */
+-static bool nv_mac_asked, nv_mac_done, persist_mac_done;
++static bool nv_mac_asked, nv_mac_done;
+ static bool diag_cmd_known, diag_cntl_done, diag_nv_sent;
+ static uint32_t diag_cmd_node, diag_cmd_port;
+ static uint8_t bt_addr_nv[6];                           /* for the Bluetooth driver later */
+@@ -2341,26 +2340,6 @@ w_on_msa_info(const uint8_t *d, uint32_t len)
+ 
+ 	LOG("wlfw: %u MSA region(s)", n);
+ 	IOSleep(20);                                /* ath10k: give the modem time before the XPU update */
+-	static bool msa_cleared;
+-	uint32_t clear = 1;
+-	(void)PE_parse_boot_argn("modem_msa0", &clear, sizeof(clear));
+-	if (!msa_cleared && clear != 0) {
+-		/* lavender: no stale firmware state from the system that ran before this fastboot boot */
+-		IOMemoryMap *mm = map_phys(WLFW_MSA_BASE, WLFW_MSA_SIZE, true);
+-		if (mm != NULL) {
+-			volatile uint32_t *w = (volatile uint32_t *)mm->getVirtualAddress();
+-			uint32_t nz = 0;
+-			for (uint32_t i = 0; i < WLFW_MSA_SIZE / 4; i++) {
+-				nz += w[i] != 0;
+-			}
+-			LOG("wlfw: MSA %x+%x had %u non-zero words (first %08x %08x %08x %08x), zeroed", WLFW_MSA_BASE, WLFW_MSA_SIZE, nz,
+-			    w[0], w[1], w[2], w[3]);
+-			bzero((void *)mm->getVirtualAddress(), WLFW_MSA_SIZE);
+-			mb();
+-			mm->release();
+-			msa_cleared = true;
+-		}
+-	}
+ 	for (uint32_t i = 0; i < n && 1 + 13 * (i + 1) <= l; i++) {
+ 		const uint8_t *e = v + 1 + 13 * i;      /* u64 addr, u32 size, u8 secure */
+ 		uint64_t addr;
+@@ -2401,6 +2380,11 @@ extern "C" int lv_pmic_byte(int write, unsigned addr, uint8_t *val);    /* bsd/d
+ static void
+ wlan_rails_log(const char *when)
+ {
++	uint32_t on = 0;
++	(void)PE_parse_boot_argn("modem_wlrails", &on, sizeof(on));
++	if (on == 0) {
++		return;
++	}
+ 	static const uint8_t ldo[] = { 5, 9, 6, 19 };
+ 	for (unsigned i = 0; i < sizeof(ldo); i++) {
+ 		unsigned base = (1u << 16) | (0x4000u + 0x100u * (ldo[i] - 1));
+@@ -2633,8 +2617,7 @@ wlfw_rx(const uint8_t *d, uint32_t len)
+ 			w_step = "WLAN ON (mission)";
+ 			LOG("*** WLAN ON (mission mode) ***");
+ 			if (wifi_enabled()) {
+-				persist_mac_done = wlan_mac_from_persist();     /* mk_wlanmac.py */
+-				if (!persist_mac_done && nv_mac[0] | nv_mac[1] | nv_mac[2] | nv_mac[3] | nv_mac[4] | nv_mac[5]) {
++				if (nv_mac[0] | nv_mac[1] | nv_mac[2] | nv_mac[3] | nv_mac[4] | nv_mac[5]) {
+ 					wlan_mac_set(nv_mac);               /* mk_wlanmacnv.py */
+ 					LOG("wlan mac: %02x:%02x:%02x:**:**:** from the modem's NV (read only)", nv_mac[0], nv_mac[1], nv_mac[2]);
+ 				}
+@@ -3373,7 +3356,7 @@ static const uint16_t scan_freqs[] = {
+ 	5745, 5765, 5785, 5805, 5825,
+ };
+ #define NFREQ ((uint32_t)(sizeof(scan_freqs) / sizeof(scan_freqs[0])))
+-static uint8_t our_mac[6] = { 0x02, 0x54, 0x4F, 0x50, 0x41, 0x5A };   /* locally administered; persist's when found */
++static uint8_t our_mac[6] = { 0x02, 0x54, 0x4F, 0x50, 0x41, 0x5A };   /* locally administered; NV 4678's when read */
+ 
+ static void
+ wlan_mac_set(const uint8_t *m)
+@@ -3382,279 +3365,6 @@ wlan_mac_set(const uint8_t *m)
+ 	chosen_mac("mac-address-wifi0", m);
+ }
+ 
+-/* ---------------- read-only ext4 on a partition, for persist's wlan_mac.bin (mk_wlanmac.py) */
+-struct e4 {
+-	const char *part;
+-	uint32_t bs, ipg, isz, dsz;
+-	uint64_t gdt;
+-};
+-
+-static bool
+-e4_rd(struct e4 *f, uint64_t off, void *dst, uint32_t len)
+-{
+-	return sweet_ufs_read_part(f->part, off, dst, len) == 0;
+-}
+-
+-/* the 15 i_block words and size of inode ino */
+-static bool
+-e4_inode(struct e4 *f, uint32_t ino, uint32_t *blk, uint64_t *size, uint32_t *flags, uint16_t *mode)
+-{
+-	uint8_t gd[64], in[160];
+-	uint32_t g = (ino - 1) / f->ipg, idx = (ino - 1) % f->ipg;
+-	if (!e4_rd(f, f->gdt + (uint64_t)g * f->dsz, gd, f->dsz > 64 ? 64 : f->dsz)) {
+-		return false;
+-	}
+-	uint64_t itab = gd[8] | (gd[9] << 8) | (gd[10] << 16) | ((uint64_t)gd[11] << 24);
+-	if (f->dsz >= 64) {
+-		itab |= (uint64_t)(gd[0x28] | (gd[0x29] << 8) | (gd[0x2a] << 16) | ((uint32_t)gd[0x2b] << 24)) << 32;
+-	}
+-	if (!e4_rd(f, itab * f->bs + (uint64_t)idx * f->isz, in, sizeof(in))) {
+-		return false;
+-	}
+-	*mode = (uint16_t)(in[0] | (in[1] << 8));
+-	*size = (uint64_t)(in[4] | (in[5] << 8) | (in[6] << 16) | ((uint32_t)in[7] << 24)) |
+-	    ((uint64_t)(in[108] | (in[109] << 8) | (in[110] << 16) | ((uint32_t)in[111] << 24)) << 32);
+-	*flags = in[32] | (in[33] << 8) | (in[34] << 16) | ((uint32_t)in[35] << 24);
+-	memcpy(blk, in + 40, 60);
+-	return true;
+-}
+-
+-/* physical block of logical block lb, 0 if none (extent depth 0 or direct blocks only) */
+-static uint64_t
+-e4_map(const uint32_t *blk, uint32_t flags, uint32_t lb)
+-{
+-	if (flags & 0x80000) {
+-		const uint8_t *h = (const uint8_t *)blk;
+-		uint16_t magic = h[0] | (h[1] << 8), n = h[2] | (h[3] << 8), depth = h[6] | (h[7] << 8);
+-		if (magic != 0xF30A || depth != 0) {
+-			return 0;
+-		}
+-		for (uint16_t i = 0; i < n && i < 4; i++) {
+-			const uint8_t *e = h + 12 + 12 * i;
+-			uint32_t first = e[0] | (e[1] << 8) | (e[2] << 16) | ((uint32_t)e[3] << 24);
+-			uint16_t cnt = (uint16_t)((e[4] | (e[5] << 8)) & 0x7fff);
+-			uint64_t start = ((uint64_t)(e[6] | (e[7] << 8)) << 32) | (e[8] | (e[9] << 8) | (e[10] << 16) | ((uint32_t)e[11] << 24));
+-			if (lb >= first && lb < first + cnt) {
+-				return start + (lb - first);
+-			}
+-		}
+-		return 0;
+-	}
+-	return lb < 12 ? blk[lb] : 0;
+-}
+-
+-/* inode of name in directory dino, 0 if absent (up to 16 blocks of directory) */
+-static uint32_t
+-e4_lookup(struct e4 *f, uint32_t dino, const char *name, uint32_t *subdirs, unsigned *nsub, unsigned maxsub)
+-{
+-	uint32_t blk[15], flags;
+-	uint64_t size;
+-	uint16_t mode;
+-	uint32_t found = 0;
+-	if (!e4_inode(f, dino, blk, &size, &flags, &mode)) {
+-		return 0;
+-	}
+-	uint8_t *b = (uint8_t *)IOMallocData(f->bs);
+-	if (b == NULL) {
+-		return 0;
+-	}
+-	for (uint32_t lb = 0; lb < 16 && (uint64_t)lb * f->bs < size && !found; lb++) {
+-		uint64_t pb = e4_map(blk, flags, lb);
+-		if (pb == 0 || !e4_rd(f, pb * f->bs, b, f->bs)) {
+-			break;
+-		}
+-		for (uint32_t o = 0; o + 8 <= f->bs;) {
+-			uint32_t ino = b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | ((uint32_t)b[o + 3] << 24);
+-			uint16_t rl = (uint16_t)(b[o + 4] | (b[o + 5] << 8));
+-			uint8_t nl = b[o + 6], ft = b[o + 7];
+-			if (rl < 8 || o + rl > f->bs) {
+-				break;
+-			}
+-			if (ino != 0 && nl != 0 && o + 8 + nl <= f->bs) {
+-				if (nl == strlen(name) && memcmp(b + o + 8, name, nl) == 0) {
+-					found = ino;
+-					break;
+-				}
+-				bool dot = (nl == 1 && b[o + 8] == '.') || (nl == 2 && b[o + 8] == '.' && b[o + 9] == '.');
+-				if (ft == 2 && !dot && subdirs != NULL && *nsub < maxsub) {
+-					subdirs[(*nsub)++] = ino;
+-				}
+-			}
+-			o += rl;
+-		}
+-	}
+-	IOFreeData(b, f->bs);
+-	return found;
+-}
+-
+-static bool
+-e4_interesting(const char *n)
+-{
+-	return strnstr(n, "wlan", 64) || strnstr(n, "wifi", 64) || strnstr(n, "wcnss", 64) || strnstr(n, "mac", 64) ||
+-	       strnstr(n, "bt", 64) || strnstr(n, "WLAN", 64) || strnstr(n, "MAC", 64);
+-}
+-
+-/* the names in directory dino, logged; subdirectories with a telling name are listed too (depth 1) */
+-static void
+-e4_list(struct e4 *f, uint32_t dino, const char *label, int depth)
+-{
+-	uint32_t blk[15], flags;
+-	uint64_t size;
+-	uint16_t mode;
+-	char line[300];
+-	int n = 0;
+-	struct { uint32_t ino; char name[40]; } sub[8];
+-	unsigned nsub = 0;
+-	if (!e4_inode(f, dino, blk, &size, &flags, &mode)) {
+-		return;
+-	}
+-	uint8_t *b = (uint8_t *)IOMallocData(f->bs);
+-	if (b == NULL) {
+-		return;
+-	}
+-	n = snprintf(line, sizeof(line), "persist %s:", label);
+-	for (uint32_t lb = 0; lb < 16 && (uint64_t)lb * f->bs < size; lb++) {
+-		uint64_t pb = e4_map(blk, flags, lb);
+-		if (pb == 0 || !e4_rd(f, pb * f->bs, b, f->bs)) {
+-			break;
+-		}
+-		for (uint32_t o = 0; o + 8 <= f->bs;) {
+-			uint32_t ino = b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | ((uint32_t)b[o + 3] << 24);
+-			uint16_t rl = (uint16_t)(b[o + 4] | (b[o + 5] << 8));
+-			uint8_t nl = b[o + 6], ft = b[o + 7];
+-			if (rl < 8 || o + rl > f->bs) {
+-				break;
+-			}
+-			if (ino != 0 && nl != 0 && nl < 40 && o + 8 + nl <= f->bs) {
+-				char nm[40];
+-				memcpy(nm, b + o + 8, nl);
+-				nm[nl] = 0;
+-				if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0) {
+-					if (n > (int)sizeof(line) - 48) {
+-						LOG("%s", line);
+-						n = snprintf(line, sizeof(line), "persist %s (more):", label);
+-					}
+-					n += snprintf(line + n, sizeof(line) - (size_t)n, " %s%s", nm, ft == 2 ? "/" : "");
+-					if (ft == 2 && depth == 0 && nsub < 8 && e4_interesting(nm)) {
+-						sub[nsub].ino = ino;
+-						strlcpy(sub[nsub].name, nm, sizeof(sub[nsub].name));
+-						nsub++;
+-					}
+-				}
+-			}
+-			o += rl;
+-		}
+-	}
+-	IOFreeData(b, f->bs);
+-	LOG("%s", line);
+-	for (unsigned i = 0; i < nsub; i++) {
+-		e4_list(f, sub[i].ino, sub[i].name, depth + 1);
+-	}
+-}
+-
+-/* persist's wlan_mac.bin -> our_mac; false (address unchanged) when not found */
+-static bool
+-wlan_mac_from_persist(void)
+-{
+-	struct e4 f = { "persist", 0, 0, 0, 32, 0 };
+-	uint8_t sb[256];
+-	uint32_t on = 1;
+-	(void)PE_parse_boot_argn("modem_mac", &on, sizeof(on));
+-	if (on == 0) {
+-		return false;
+-	}
+-	if (!e4_rd(&f, 1024, sb, sizeof(sb)) || (sb[56] | (sb[57] << 8)) != 0xEF53) {
+-		LOG("wlan mac: persist is not ext4 (or unreadable)");
+-		return false;
+-	}
+-	uint32_t logbs = sb[24] | (sb[25] << 8) | (sb[26] << 16) | ((uint32_t)sb[27] << 24);
+-	f.bs = 1024u << logbs;
+-	f.ipg = sb[40] | (sb[41] << 8) | (sb[42] << 16) | ((uint32_t)sb[43] << 24);
+-	f.isz = sb[88] | (sb[89] << 8);
+-	uint32_t incompat = sb[96] | (sb[97] << 8) | (sb[98] << 16) | ((uint32_t)sb[99] << 24);
+-	if (incompat & 0x80) {
+-		f.dsz = sb[254] | (sb[255] << 8);
+-	}
+-	if (f.dsz < 32) {
+-		f.dsz = 32;
+-	}
+-	f.gdt = (uint64_t)(f.bs == 1024 ? 2 : 1) * f.bs;
+-	if (f.bs > 65536 || f.ipg == 0 || f.isz < 128) {
+-		LOG("wlan mac: persist superblock not understood");
+-		return false;
+-	}
+-	e4_list(&f, 2, "/", 0);
+-	static const char *const names[] = { "wlan_mac.bin", "wlan.mac", "wifi_mac", "mac.bin", "wlan_mac" };
+-	uint32_t ino = 0;
+-	unsigned nsub = 0;
+-	for (unsigned k = 0; ino == 0 && k < sizeof(names) / sizeof(names[0]); k++) {
+-		uint32_t subs[24];
+-		nsub = 0;
+-		ino = e4_lookup(&f, 2, names[k], subs, &nsub, 24);
+-		for (unsigned i = 0; ino == 0 && i < nsub; i++) {
+-			ino = e4_lookup(&f, subs[i], names[k], NULL, NULL, 0);
+-		}
+-		if (ino != 0) {
+-			LOG("wlan mac: found %s on persist", names[k]);
+-		}
+-	}
+-	if (ino == 0) {
+-		LOG("wlan mac: no MAC file on persist (root and %u subfolders)", nsub);
+-		return false;
+-	}
+-	uint32_t blk[15], flags;
+-	uint64_t size;
+-	uint16_t mode;
+-	char txt[257];
+-	if (!e4_inode(&f, ino, blk, &size, &flags, &mode) || size == 0 || size > 256) {
+-		LOG("wlan mac: wlan_mac.bin unreadable (size %llu)", size);
+-		return false;
+-	}
+-	uint8_t *b = (uint8_t *)IOMallocData(f.bs);
+-	uint64_t pb = e4_map(blk, flags, 0);
+-	bool ok = b != NULL && pb != 0 && e4_rd(&f, pb * f.bs, b, f.bs);
+-	if (ok) {
+-		memcpy(txt, b, (size_t)size);
+-		txt[size] = 0;
+-	}
+-	if (b != NULL) {
+-		IOFreeData(b, f.bs);
+-	}
+-	if (!ok) {
+-		LOG("wlan mac: wlan_mac.bin unreadable");
+-		return false;
+-	}
+-	uint8_t mac[6];
+-	const char *p = strnstr(txt, "Intf0MacAddress=", sizeof(txt));
+-	if (p != NULL) {
+-		p += 16;
+-		for (int i = 0; i < 6; i++) {
+-			int v = 0;
+-			for (int k = 0; k < 2; k++, p++) {
+-				char c = *p;
+-				int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+-				if (d < 0) {
+-					LOG("wlan mac: Intf0MacAddress not 12 hex digits");
+-					return false;
+-				}
+-				v = v * 16 + d;
+-			}
+-			mac[i] = (uint8_t)v;
+-		}
+-	} else if (size == 6) {
+-		memcpy(mac, txt, 6);
+-	} else {
+-		LOG("wlan mac: wlan_mac.bin of %llu bytes, format not known", size);
+-		return false;
+-	}
+-	if ((mac[0] & 1) || (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) == 0) {
+-		LOG("wlan mac: the address in wlan_mac.bin is not usable");
+-		return false;
+-	}
+-	memcpy(our_mac, mac, 6);
+-	LOG("wlan mac: %02x:%02x:%02x:**:**:** from persist (read only)", mac[0], mac[1], mac[2]);
+-	return true;
+-}
+ struct bss {
+ 	uint8_t bssid[6]; char ssid[33]; uint8_t chan; int8_t rssi; uint16_t seen;
+ 	uint8_t raw_ssid[32], raw_ssid_len; uint16_t freq, bintval, capab, ie_len; uint32_t last_ms; uint8_t ie[768];
+@@ -5455,7 +5165,7 @@ svc_announce(void)
+ static struct { bool used; uint8_t chan, svc, cid; uint32_t node, port; } qmux_cl[QMUX_CLIENTS];
+ static struct { uint8_t *data; uint32_t len; uint8_t chan; } qmux_ring[QMUX_RING];
+ static unsigned qmux_head, qmux_tail, qmux_logged;
+-static uint32_t qmux_log_max = 1500;
++static uint32_t qmux_log_max = 0;              /* qmux_log=N: first N messages (QMI identifiers: keep local) */
+ 
+ /* one bridged message: direction, service, client, message id, the bytes after the QMI header */
+ static void
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index ac362cf..2c4cd87 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -1115,10 +1115,13 @@ lavender_fw(const char *name, uint32_t *size)
+ static void
+ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+-	uint32_t khz = 0;
++	uint32_t khz = 0, bench = 0;
+ 	PE_parse_boot_argn("lv_ddr_khz", &khz, sizeof(khz));
+-	IOSleep(2000);
+-	lavender_memcpy_speed("before");
++	PE_parse_boot_argn("lv_ddr_bench", &bench, sizeof(bench));
++	if (bench != 0 || khz != 0) {
++		IOSleep(2000);
++		lavender_memcpy_speed("before");
++	}
+ 	if (khz != 0) {
+ 		bool ok = topaz_rpm_write(0, RPM_MEM_CLK, 0, RPM_KEY_KHZ, khz);
+ 		LOG("LVDDR vote %u kHz -> %s", khz, ok ? "acked" : "FAILED");

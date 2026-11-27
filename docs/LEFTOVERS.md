@@ -192,6 +192,14 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
    `lavender_gpu_cp()` and lv_gpu stages 1-6/9: remove or fold into one diag file; keep 1026 for DVFS.
    Also track 1047 (`lv_serror=1`): find the SError source instead of recording it.
 
+## Cleanup done
+
+- **1138** (mk_cleanup1.py, not yet checked on the phone): 1056 MSA zeroing and the 1081/1082 persist
+  ext4 reader removed; opt-in now: `modem_wlrails=1` (1054 rails readback), `qmux_log=N` (default 0),
+  `abp_log=1` (1059 call log; `abp=1` keeps the power hook), `sweettouchdiag=N` (default 0),
+  `lv_ddr_bench=1` (1008 memcpy; also with `lv_ddr_khz`), `sweetsample=NAMES` (sampler off without it).
+  BT RX tries were already cleaned in 1114.
+
 ## No-result log (kept up to date, newest last)
 
 Every patch that did not bring the result it was made for, with what became of it. Rule: once the
@@ -200,8 +208,8 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | Patch | Area | Meant to | Result | Now |
 |---|---|---|---|---|
 | 1026, 1028, 1029, 1030, 1034 | GPU | 600 MHz / vsync / surface arena tries | no gain | off unless boot-arg; 1026 kept for DVFS |
-| 1056 | Wi-Fi | zero the MSA region before WLAN firmware | no change | active - to remove |
-| 1081, 1082 | Wi-Fi | MAC from persist file | file absent (MAC comes from NV 4678, 1083) | active - to remove |
+| 1056 | Wi-Fi | zero the MSA region before WLAN firmware | no change | removed in 1138 |
+| 1081, 1082 | Wi-Fi | MAC from persist file | file absent (MAC comes from NV 4678, 1083) | removed in 1138 (persist no longer read) |
 | 1089 | BT | 1 s raw dump after firmware | diagnostic only | removed in 1114 |
 | 1090 | BT | HCI_Reset retries (again / IBS 0xFD / no CTS) | not needed after NVM fix 1092 | removed in 1114 |
 | 1091 | BT | NVM layout log | diagnostic only | removed (1092) |
