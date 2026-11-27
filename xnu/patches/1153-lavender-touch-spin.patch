@@ -1,0 +1,111 @@
+lavender: touch I2C waits spin instead of sleeping (generator: xnu/src/mk_touchspin.py)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 49123b2..f8564a0 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -58,6 +58,22 @@ static struct {
+ 	int diag;                       /* boot-arg sweettouchdiag: log the first N reports, then every 200th */
+ } lt;
+ 
++/* lavender: bus waits spin on the timebase; delay() of a few us blocked for tens (xnu/src/mk_touchspin.py) */
++static inline void
++lv_spin_us(uint32_t us)
++{
++	static uint64_t per_us;
++	if (per_us == 0) {
++		nanoseconds_to_absolutetime(1000, &per_us);
++		if (per_us == 0) {
++			per_us = 1;
++		}
++	}
++	uint64_t end = mach_absolute_time() + per_us * us;
++	while (mach_absolute_time() < end) {
++	}
++}
++
+ static inline uint32_t
+ pin_rd(vm_offset_t pin, uint32_t off)
+ {
+@@ -106,10 +122,10 @@ scl_up(void)
+ 	line_release(lt.scl);
+ 	for (int i = 0; i < 1000; i++) {
+ 		if (line_high(lt.scl)) {
+-			delay(HALF_US);
++			lv_spin_us(HALF_US);
+ 			return true;
+ 		}
+-		delay(1);
++		lv_spin_us(1);
+ 	}
+ 	return false;
+ }
+@@ -122,9 +138,9 @@ i2c_start(void)
+ 		return false;                   /* bus stuck */
+ 	}
+ 	line_low(lt.sda);
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ 	line_low(lt.scl);
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ 	return true;
+ }
+ 
+@@ -132,10 +148,10 @@ static void
+ i2c_stop(void)
+ {
+ 	line_low(lt.sda);
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ 	(void)scl_up();
+ 	line_release(lt.sda);
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ }
+ 
+ /* One byte out; returns true on ACK. */
+@@ -148,14 +164,14 @@ i2c_write_byte(uint8_t b)
+ 		} else {
+ 			line_low(lt.sda);
+ 		}
+-		delay(HALF_US);
++		lv_spin_us(HALF_US);
+ 		if (!scl_up()) {
+ 			return false;
+ 		}
+ 		line_low(lt.scl);
+ 	}
+ 	line_release(lt.sda);
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ 	if (!scl_up()) {
+ 		return false;
+ 	}
+@@ -170,7 +186,7 @@ i2c_read_byte(bool ack)
+ 	uint8_t b = 0;
+ 	line_release(lt.sda);
+ 	for (int i = 7; i >= 0; i--) {
+-		delay(HALF_US);
++		lv_spin_us(HALF_US);
+ 		(void)scl_up();
+ 		if (line_high(lt.sda)) {
+ 			b |= (uint8_t)(1u << i);
+@@ -180,7 +196,7 @@ i2c_read_byte(bool ack)
+ 	if (ack) {
+ 		line_low(lt.sda);
+ 	}
+-	delay(HALF_US);
++	lv_spin_us(HALF_US);
+ 	(void)scl_up();
+ 	line_low(lt.scl);
+ 	line_release(lt.sda);
+@@ -257,7 +273,7 @@ i2c_recover(void)
+ 	line_release(lt.sda);
+ 	for (int i = 0; i < 9 && !line_high(lt.sda); i++) {
+ 		line_low(lt.scl);
+-		delay(HALF_US);
++		lv_spin_us(HALF_US);
+ 		(void)scl_up();
+ 	}
+ 	i2c_stop();
