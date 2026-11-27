@@ -1,0 +1,24 @@
+lavender: touch bus half_us 1 by default (generator: xnu/src/mk_touchfast.py)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 214623c..34ad394 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -48,7 +48,7 @@ void sweet_touch_init(void);
+ #define NVT_EVENT_BUF   0x21c00u
+ #define NVT_REPORT_LEN  65u
+ #define NVT_FINGERS     10u
+-static uint32_t lv_half_us = 2;         /* half an SCL period; boot-arg sweettouch_half_us (xnu/src/mk_touchshort.py) */
++static uint32_t lv_half_us = 1;    /* (1155: 1 by default, xnu/src/mk_touchfast.py) */         /* half an SCL period; boot-arg sweettouch_half_us (xnu/src/mk_touchshort.py) */
+ #define HALF_US         lv_half_us
+ 
+ static struct {
+@@ -369,7 +369,7 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 	}
+ 	PE_parse_boot_argn("sweettouch_half_us", &lv_half_us, sizeof(lv_half_us));
+ 	if (lv_half_us == 0 || lv_half_us > 10) {
+-		lv_half_us = 2;
++		lv_half_us = 1;
+ 	}
+ 	/* lavender: with a finger down, each report as its edge comes (xnu/src/mk_touchpace.py) */
+ 	uint32_t down_ms = 1, down_max = 30, since = 0, sessions = 0, session_reports = 0;
