@@ -1,0 +1,86 @@
+lavender: audio A4b - register ranges, replaceable amp init, later SD0 check (generator: xnu/src/mk_audio14.py)
+
+diff --git a/iokit/Kernel/arm/LavenderAudio.cpp b/iokit/Kernel/arm/LavenderAudio.cpp
+index fed353f..4db5eaf 100644
+--- a/iokit/Kernel/arm/LavenderAudio.cpp
++++ b/iokit/Kernel/arm/LavenderAudio.cpp
+@@ -230,6 +230,31 @@ lv_amp_setup(void)
+ 		return false;
+ 	}
+ 	int bad = 0;
++	char alt[256];
++	if (PE_parse_boot_argn("audio_amp_init", alt, sizeof(alt))) {
++		/* "reg=val,..." instead of the built-in table (mk_audio14.py) */
++		const char *p = alt;
++		while (*p != 0) {
++			unsigned long r = 0, v = 0;
++			int base = 10;
++			if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) { base = 16; p += 2; }
++			for (; *p != 0 && *p != '='; p++) { r = r * base + (unsigned long)(*p <= '9' ? *p - '0' : (*p | 0x20) - 'a' + 10); }
++			if (*p != '=') { break; }
++			p++;
++			base = 10;
++			if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) { base = 16; p += 2; }
++			for (; *p != 0 && *p != ','; p++) { v = v * base + (unsigned long)(*p <= '9' ? *p - '0' : (*p | 0x20) - 'a' + 10); }
++			int w = lv_amp_write((uint16_t)r, (uint8_t)v);
++			bad += w != 0;
++			if (r == 0x100) {
++				IOSleep(2);
++			}
++			LOG("audio_amp_init: 0x%04lx = 0x%02lx -> %d (read back %#x)", r, v, w, lv_amp_read((uint16_t)r));
++			if (*p == ',') { p++; }
++		}
++		LOG("max98927: boot-arg init table, %d NAKs", bad);
++		return bad == 0;
++	}
+ 	for (unsigned i = 0; i < sizeof(init) / sizeof(init[0]); i++) {
+ 		if (lv_amp_write(init[i][0], (uint8_t)init[i][1]) != 0) {
+ 			bad++;
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index e7f76ed..53087a9 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1561,7 +1561,7 @@ amp_list_read(void)
+ {
+ 	char buf[256] = "0x3a,0xff,0x11,0x1,0x2,0x3,0x4,0x5,0x6";
+ 	(void)PE_parse_boot_argn("audio_amp_read", buf, sizeof(buf));
+-	char line[256];
++	char line[512];
+ 	unsigned n = 0;
+ 	const char *p = buf;
+ 	while (*p != 0 && n < sizeof(line) - 16) {
+@@ -1570,7 +1570,13 @@ amp_list_read(void)
+ 		if (e == p) {
+ 			break;
+ 		}
+-		n += (unsigned)snprintf(line + n, sizeof(line) - n, "%lx=%x ", r, lv_amp_read((uint16_t)r));
++		unsigned long to = r;
++		if (*e == '-') {
++			to = lv_num(e + 1, &e);
++		}
++		for (unsigned long q = r; q <= to && q < r + 64 && n < sizeof(line) - 16; q++) {
++			n += (unsigned)snprintf(line + n, sizeof(line) - n, "%lx=%x ", q, lv_amp_read((uint16_t)q));
++		}
+ 		p = *e == ',' ? e + 1 : e;
+ 		if (*e != ',') {
+ 			break;
+@@ -1725,6 +1731,11 @@ a4b_play(void)
+ 				LOG("A4b: amp on: AMP_EN %d GLOBAL_EN %d", lv_amp_write(0x003A, 0x01), lv_amp_write(0x00FF, 0x01));
+ 			}
+ 			LOG("A4b: read back AMP_EN %#x GLOBAL_EN %#x", lv_amp_read(0x003A), lv_amp_read(0x00FF));
++			for (unsigned w0 = ms(); ms() - w0 < 500;) {
++				if (!glink_poll()) {
++					IODelay(200);
++				}
++			}
+ 			sd0_sample();
+ 			uint32_t secs = 3;
+ 			(void)PE_parse_boot_argn("audio_secs", &secs, sizeof(secs));
+@@ -1740,6 +1751,7 @@ a4b_play(void)
+ 					amp_list_read();
+ 				}
+ 			}
++			sd0_sample();
+ 			LOG("A4b: amp off: GLOBAL_EN %d AMP_EN %d", lv_amp_write(0x00FF, 0x00), lv_amp_write(0x003A, 0x00));
+ 		}
+ 	}
