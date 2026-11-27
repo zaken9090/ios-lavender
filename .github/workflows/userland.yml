@@ -51,6 +51,7 @@ jobs:
           python3 userland/gpu/patch_sum.py work/gpu/eagl.c
           python3 userland/gpu/patch_tc.py work/gpu/eagl.c
           python3 userland/gpu/patch_blurcolour.py work/gpu/eagl.c
+          python3 userland/gpu/patch_imageof.py work/gpu/eagl.c
           # Mesa patches of this repo (threaded context for OSMesa + a5xx fixes), applied with the base's by mk-mesa-mac.sh
           cp userland/mesa/*.patch work/mesa/
           python3 userland/gpu/patch_mesacpu.py work
@@ -78,13 +79,15 @@ jobs:
           export PATH="$(brew --prefix bison)/bin:$PATH"
           bash -x mk-mesa-mac.sh || { grep -n -E -B3 -A25 "error:|FAILED:" build-mesa/ninja.log 2>/dev/null | head -150; tail -20 build-mesa/meson-setup.log 2>/dev/null; exit 1; }
           ls -la build-mesa/out
+          # lavender: the unstripped library, for the profiler's offsets (not installed on the phone)
+          mkdir -p sym && find build-mesa -name libOSMesa.8.dylib -not -path "*/out/*" -exec cp {} sym/ \; && ls -la sym
 
       - name: EAGL library, loader, backboardd wrapper
         working-directory: work
         run: |
           set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O1"
+          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O2"
           M=build-mesa/out
           mkdir -p out
           python3 gpu/mkeagl.py gpu/eagl_slots.txt $M/gl.xml $M/exported-gl.txt gpu/eagl.c > gpu/eagl_gen.h
@@ -104,4 +107,10 @@ jobs:
         with:
           name: topaz-userland
           path: work/out/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-symbols
+          path: work/sym/
           retention-days: 14
