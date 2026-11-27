@@ -1,0 +1,110 @@
+lavender: audio - the amplifier is a MAX98937: Xiaomi init table, enable 0x39/0x500 (generator: xnu/src/mk_audio15.py)
+
+diff --git a/iokit/Kernel/arm/LavenderAudio.cpp b/iokit/Kernel/arm/LavenderAudio.cpp
+index 4db5eaf..1225472 100644
+--- a/iokit/Kernel/arm/LavenderAudio.cpp
++++ b/iokit/Kernel/arm/LavenderAudio.cpp
+@@ -198,34 +198,31 @@ lv_amp_write(uint16_t reg, uint8_t val)
+ extern "C" bool
+ lv_amp_setup(void)
+ {
++	/* MAX98937 (Xiaomi lavender-q-oss max98937.c, docs/MAX98927.md): probe/defaults, then hw_params */
+ 	static const uint16_t init[][2] = {
+-		{ 0x0100, 0x01 },                       /* soft reset */
+-		{ 0x001C, 0xFF }, { 0x001D, 0xFF },     /* IV slots Hi-Z */
+-		{ 0x0025, 0x80 }, { 0x0026, 0x01 },     /* mono mix (L+R)/2 */
+-		{ 0x0036, 0x38 },                       /* amp volume */
+-		{ 0x003C, 0x05 },                       /* speaker gain */
+-		{ 0x0037, 0x03 }, { 0x003F, 0xF7 },     /* DC blockers */
+-		{ 0x0040, 0x1C }, { 0x0042, 0x3E },     /* boost */
+-		{ 0x0043, 0x04 }, { 0x0044, 0x00 }, { 0x0045, 0x24 },
+-		{ 0x007F, 0x06 },                       /* brownout */
+-		{ 0x0082, 0x08 }, { 0x0086, 0x01 }, { 0x0087, 0x10 },
+-		{ 0x0021, 0x00 },                       /* slave */
+-		{ 0x0020, 0x40 },                       /* I2S, 16-bit channels */
+-		{ 0x0018, 0x03 },                       /* RX channels 0 and 1 */
+-		{ 0x003B, 0x00 }, { 0x0035, 0x00 },     /* PCM source, no PDM */
+-		{ 0x0022, 0x22 },                       /* 32 BCLK per frame */
+-		{ 0x0023, 0x08 }, { 0x0024, 0x88 },     /* 48 kHz, IV ADC 48 kHz */
++		{ 0x0040, 0x01 }, { 0x001E, 0x01 }, { 0x0018, 0x03 }, { 0x001A, 0x03 }, { 0x001C, 0xFC }, { 0x0028, 0x80 },
++		{ 0x0029, 0x01 }, { 0x0011, 0x03 }, { 0x0053, 0x00 }, { 0x0055, 0x00 }, { 0x005E, 0x16 }, { 0x005F, 0x00 },
++		{ 0x0060, 0x0C }, { 0x0061, 0x0C }, { 0x0062, 0x12 }, { 0x0063, 0x00 }, { 0x0064, 0x0C }, { 0x0065, 0x0C },
++		{ 0x0066, 0x0E }, { 0x0067, 0x03 }, { 0x0068, 0x18 }, { 0x0069, 0x18 }, { 0x006A, 0x0A }, { 0x006B, 0x00 },
++		{ 0x006C, 0x80 }, { 0x006D, 0x00 }, { 0x005A, 0x00 }, { 0x005B, 0x00 }, { 0x005C, 0x1F }, { 0x005D, 0x00 },
++		{ 0x0042, 0x07 }, { 0x0014, 0x75 }, { 0x0015, 0x8C }, { 0x0017, 0x55 }, { 0x003E, 0xF7 }, { 0x0023, 0x40 },
++		{ 0x003A, 0x00 }, { 0x001B, 0x00 }, { 0x0019, 0x00 }, { 0x001F, 0x03 }, { 0x001D, 0xFF }, { 0x003D, 0x03 },
++		{ 0x0035, 0x00 }, { 0x0036, 0x38 }, { 0x0037, 0x0F }, { 0x003B, 0x55 }, { 0x003C, 0x85 }, { 0x003F, 0x1C },
++		{ 0x0041, 0x40 }, { 0x0043, 0x00 }, { 0x0044, 0xFF }, { 0x0016, 0x08 }, { 0x0073, 0x0F }, { 0x0077, 0x01 },
++		{ 0x0052, 0x02 }, { 0x0020, 0x00 }, { 0x0021, 0x00 }, { 0x0022, 0x00 }, { 0x004E, 0x10 }, { 0x0079, 0x45 },
++		{ 0x007A, 0x2B }, { 0x007B, 0x04 },
++		{ 0x0023, 0x40 }, { 0x0026, 0x08 }, { 0x0027, 0x88 }, { 0x0025, 0x02 },     /* 16-bit I2S, 48 kHz, 32 BCLK */
+ 	};
+ 	if (pin_sda == NULL) {
+ 		return false;
+ 	}
+ 	pin_rst[1] = 0;                                 /* reset (active low) */
+ 	pin_cfg(pin_rst, CFG_OE);
+-	IOSleep(2);
++	IOSleep(1);
+ 	pin_rst[1] = 2;                                 /* release */
+-	IOSleep(6);
+-	int rev = lv_amp_read(0x01FF);
+-	LOG("max98927: revision %#x (0x40 expected)", rev);
++	IOSleep(10);
++	int rev = lv_amp_read(0x01FF), rev37 = lv_amp_read(0x0600);
++	LOG("max98937: 0x01FF %#x (bit 6: a 98927), 0x0600 %#x (bit 6: a 98937)", rev, rev37);
+ 	if (rev < 0) {
+ 		return false;
+ 	}
+@@ -259,12 +256,9 @@ lv_amp_setup(void)
+ 		if (lv_amp_write(init[i][0], (uint8_t)init[i][1]) != 0) {
+ 			bad++;
+ 		}
+-		if (i == 0) {
+-			IOSleep(2);                     /* after the soft reset */
+-		}
+ 	}
+-	LOG("max98927: init table written, %d NAKs; 0x0020=%#x 0x0023=%#x 0x0036=%#x", bad, lv_amp_read(0x0020), lv_amp_read(0x0023),
+-	    lv_amp_read(0x0036));
++	LOG("max98937: init table written, %d NAKs; 0x0023=%#x 0x0025=%#x 0x0027=%#x 0x003C=%#x", bad, lv_amp_read(0x0023),
++	    lv_amp_read(0x0025), lv_amp_read(0x0027), lv_amp_read(0x003C));
+ 	return bad == 0;
+ }
+ 
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 53087a9..2bf3ff6 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1559,7 +1559,7 @@ amp_list_write(const char *arg)
+ static void
+ amp_list_read(void)
+ {
+-	char buf[256] = "0x3a,0xff,0x11,0x1,0x2,0x3,0x4,0x5,0x6";
++	char buf[256] = "0x500,0x39,0x2,0x3,0x1,0x600";
+ 	(void)PE_parse_boot_argn("audio_amp_read", buf, sizeof(buf));
+ 	char line[512];
+ 	unsigned n = 0;
+@@ -1728,9 +1728,12 @@ a4b_play(void)
+ 			if (PE_parse_boot_argn("audio_amp_on", on, sizeof(on))) {
+ 				amp_list_write("audio_amp_on");
+ 			} else {
+-				LOG("A4b: amp on: AMP_EN %d GLOBAL_EN %d", lv_amp_write(0x003A, 0x01), lv_amp_write(0x00FF, 0x01));
++				LOG("A4b: amp on: SPK_EN 0x39 %d GLOBAL_EN 0x500 %d", lv_amp_write(0x0039, 0x01), lv_amp_write(0x0500, 0x01));
+ 			}
+-			LOG("A4b: read back AMP_EN %#x GLOBAL_EN %#x", lv_amp_read(0x003A), lv_amp_read(0x00FF));
++			IOSleep(20);
++			int st2 = lv_amp_read(0x0002), st3 = lv_amp_read(0x0003);
++			LOG("A4b: read back SPK_EN %#x GLOBAL_EN %#x; 0x0002 %#x (bit 7 power-up done) 0x0003 %#x (bit 0 power-up fail, bit 3 boost UVLO)",
++			    lv_amp_read(0x0039), lv_amp_read(0x0500), st2, st3);
+ 			for (unsigned w0 = ms(); ms() - w0 < 500;) {
+ 				if (!glink_poll()) {
+ 					IODelay(200);
+@@ -1752,7 +1755,7 @@ a4b_play(void)
+ 				}
+ 			}
+ 			sd0_sample();
+-			LOG("A4b: amp off: GLOBAL_EN %d AMP_EN %d", lv_amp_write(0x00FF, 0x00), lv_amp_write(0x003A, 0x00));
++			LOG("A4b: amp off: GLOBAL_EN %d SPK_EN %d", lv_amp_write(0x0500, 0x00), lv_amp_write(0x0039, 0x00));
+ 		}
+ 	}
+ 	a4_playing = false;
