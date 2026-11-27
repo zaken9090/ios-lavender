@@ -240,3 +240,17 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     Android side is read from the stock kernel sources (first-project/ref).
   - Gold: 1747 MHz (L 91) is now the default, in the shim and the kernel (`lv_gold_l=115` gives 2208
     back). Bench at 1747: home 15.2, Settings 50.3, 0 hangs (n2a).
+- xnu 1163 (kernel run-46064163663, runs p1a/p1b): one lock for the PMIC bus - the metrics' fuel-gauge
+  reads collided with the keys thread's reads (2-6 key events nobody pressed per bench since 1160: the
+  volume slider twitched, user; 0 before 1160, 0 again now). The LVM GPU share now uses the real clock:
+
+  | GPU clock | home | Settings |
+  |---|---|---|
+  | 300 MHz | 14.8 fps, GPU busy 94 % | 50.3 fps, busy 74 % |
+  | 600 MHz | 15.9 fps, GPU busy 96 % | 49.7 fps, busy 65 % |
+
+  Twice the core clock and the GPU is busy for the same share of the time: its time goes into memory,
+  not into its own logic (sysmem rendering: every blend reads and writes DRAM; glgmem=1 gave home
+  19.6-22.7 against 11 before it was rejected for flicker). The lever for the home screen is the
+  memory path (tiled rendering without the flicker, bus/DDR), not the GPU or CPU clock. 300 MHz stays
+  the default (less heat for the same fps).
