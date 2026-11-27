@@ -20,6 +20,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import metrics  # noqa: E402
 import usblog  # noqa: E402
 
 FPS_LINE = re.compile(rb"SWEET FPS: (\d+) frames in (\d+) ms")
@@ -218,8 +219,11 @@ def main():
     if temps:
         g, h, s, ld, c, cp = (x.decode() for x in temps[-1])
         therm = f" | gpu {g} C, hottest {h} C (s{s}), load {ld}% (cpu{c} {cp}%)"
+    # per-second numbers of each phase (xnu 1160 LVM lines): CPU, busiest core, GPU, heat, battery current
+    hm, sm = metrics.short(metrics.parse(home_log)), metrics.short(metrics.parse(settings_log))
     line = (f"BENCH {a.tag} {stamp} {'fast ' if a.fast else 'slow '}{'' if home else 'NOT-UNLOCKED '}"
-            f"home: {fps_stats(home_log)} | settings: {fps_stats(settings_log)}{therm}")
+            f"home: {fps_stats(home_log)}{' [' + hm + ']' if hm else ''} | "
+            f"settings: {fps_stats(settings_log)}{' [' + sm + ']' if sm else ''}{therm}")
     print(line)
     with open(a.results, "a", encoding="utf-8") as f:
         f.write(line + "\n")
