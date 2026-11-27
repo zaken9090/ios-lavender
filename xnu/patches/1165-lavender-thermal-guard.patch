@@ -1,0 +1,151 @@
+lavender: the Gold clock steps down when the chip is hot: lv_therm_hi (85 C), lv_therm_lo (generator: xnu/src/mk_thermalguard.py)
+
+diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
+index aa39a52..4fb1bc3 100644
+--- a/iokit/Kernel/arm/LavenderMetrics.cpp
++++ b/iokit/Kernel/arm/LavenderMetrics.cpp
+@@ -141,8 +141,10 @@ gold_source(uint32_t src)
+ }
+ 
+ /* 0 = set; -1 = bad L or not mapped; -2 = the PLL did not lock (the cores stay on GPLL0, 600 MHz) */
+-extern "C" int
+-lv_gold_set_l(uint32_t l)
++static uint32_t gold_want;               /* the L asked for (xnu/src/mk_thermalguard.py): the guard returns to it */
++
++static int
++gold_set(uint32_t l)
+ {
+ 	static IOLock *lock;
+ 	uint32_t was;
+@@ -186,6 +188,66 @@ lv_gold_set_l(uint32_t l)
+ 	return r;
+ }
+ 
++extern "C" int
++lv_gold_set_l(uint32_t l)
++{
++	int r = gold_set(l);
++	if (r == 0) {
++		gold_want = l;
++	}
++	return r;
++}
++
++/* ---- the Gold clock steps down when the chip is hot (xnu/src/mk_thermalguard.py) ---- */
++
++static uint32_t therm_hi = 85, therm_lo;
++static bool quiet;                              /* lv_metrics=0: no lines, the guard still runs */
++
++static void
++thermal_guard(int hottest)
++{
++	static const uint8_t step[] = { 58, 73, 91, 102, 112, 115 };
++	static uint32_t cool_s;
++	uint32_t l = pll_gold[1] & 0xffff, to = 0;
++
++	if (therm_hi == 0 || hottest <= -1000) {
++		return;
++	}
++	if (gold_want == 0) {
++		gold_want = l;
++	}
++	if (hottest >= (int)therm_hi) {
++		cool_s = 0;
++		for (int i = (int)sizeof(step) - 1; i >= 0; i--) {
++			if (step[i] < l) {
++				to = step[i];
++				break;
++			}
++		}
++		if (to == 0) {
++			return;                         /* already at the lowest step */
++		}
++		IOLog("LV THERMAL: %d C, limit %u: Gold L %u -> %u (%u MHz)\n", hottest, therm_hi, l, to, to * 192 / 10);
++		gold_set(to);
++	} else if (hottest <= (int)therm_lo && l < gold_want) {
++		if (++cool_s < 10) {
++			return;
++		}
++		cool_s = 0;
++		to = gold_want;
++		for (unsigned i = 0; i < sizeof(step); i++) {
++			if (step[i] > l && step[i] <= gold_want) {
++				to = step[i];
++				break;
++			}
++		}
++		IOLog("LV THERMAL: %d C, cool (%u): Gold L %u -> %u (%u MHz)\n", hottest, therm_lo, l, to, to * 192 / 10);
++		gold_set(to);
++	} else {
++		cool_s = 0;
++	}
++}
++
+ /* ---- CPU by process (as the sampler's SMC line, with a table of its own) ---- */
+ 
+ static struct { int pid; uint64_t last; } proc_cpu[512];
+@@ -302,7 +364,7 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 
+ 	IOSleep(2000);
+ 	(void)PE_parse_boot_argn("lv_cpuinfo", &info, sizeof(info));
+-	if (info != 0) {
++	if (info != 0 && !quiet) {
+ 		cpu_report();
+ 	}
+ 	uint32_t gold_l = 0;
+@@ -333,6 +395,7 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 		}
+ 		n += snprintf(line + n, sizeof(line) - n, " %d %d %d %d gpu %d max %d", tsens(3, &ok), tsens(4, &ok), tsens(5, &ok),
+ 		    tsens(6, &ok), tsens(8, &ok), max);
++		thermal_guard(max);
+ 
+ 		uint64_t busy = 0;
+ 		uint32_t mhz = 0, sub = 0, rec = 0, fail = 0;
+@@ -370,7 +433,7 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 		} else {
+ 			n += snprintf(line + n, sizeof(line) - n, " | bat -");
+ 		}
+-		if (ns != 0) {
++		if (ns != 0 && !quiet) {
+ 			IOLog("%s\n", line);
+ 		}
+ 		{
+@@ -383,7 +446,7 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 					d[i] = c[i] >= was[i] ? c[i] - was[i] : 0;      /* (a GPU reset starts them again) */
+ 					was[i] = c[i];
+ 				}
+-				if (had && ns != 0) {
++				if (had && ns != 0 && !quiet) {
+ 					IOLog("LVG %llu ms: tpbeat %llu spbeat %llu latcyc %llu latn %llu | tpbusy %llu tpreq %llu tpmiss %llu | "
+ 					    "spalu %llu spbusy %llu spidle %llu | rbbusy %llu rbpass %llu rbstall %llu rbfifo %llu\n", ns / 1000000,
+ 					    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13]);
+@@ -393,10 +456,10 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 				had = false;
+ 			}
+ 		}
+-		if (top_n != 0) {
++		if (top_n != 0 && !quiet) {
+ 			proc_line(ns);
+ 		}
+-		if (khz_every != 0 && lines % khz_every == 0) {
++		if (khz_every != 0 && !quiet && lines % khz_every == 0) {
+ 			core_measure();
+ 			IOLog("LVK khz %u %u %u %u\n", core[0].khz, core[1].khz, core[2].khz, core[3].khz);
+ 		}
+@@ -417,8 +480,15 @@ lv_metrics_start(void)
+ 	(void)PE_parse_boot_argn("lv_metrics", &period_ms, sizeof(period_ms));
+ 	(void)PE_parse_boot_argn("lv_metrics_khz", &khz_every, sizeof(khz_every));
+ 	(void)PE_parse_boot_argn("lv_metrics_top", &top_n, sizeof(top_n));
++	(void)PE_parse_boot_argn("lv_therm_hi", &therm_hi, sizeof(therm_hi));
++	therm_lo = therm_hi > 10 ? therm_hi - 10 : 0;
++	(void)PE_parse_boot_argn("lv_therm_lo", &therm_lo, sizeof(therm_lo));
+ 	if (period_ms == 0) {
+-		return;
++		if (therm_hi == 0) {
++			return;
++		}
++		quiet = true;                           /* no lines, the thermal guard only */
++		period_ms = 1000;
+ 	}
+ 	if (period_ms < 100) {
+ 		period_ms = 100;
