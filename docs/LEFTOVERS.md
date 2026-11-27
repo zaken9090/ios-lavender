@@ -265,3 +265,11 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 - Battery: SweetBattery reports a static 100 % (topaz fuel-gauge addresses); the PM660 gauge is readable
   (0x41A0 V, 0x41A2 I). Under load on a PC port the battery drains (input limit 500 mA).
 - backboardd / SpringBoard CPU does not scale with the core clock: profile the App Library scroll.
+- (late night, corrects the two items above) GPU 600 MHz works with `lv_gpu_mhz=600`; the hangs were
+  `gpu_mhz=600`. fps follow neither the CPU nor the GPU clock: find the common limit (memory, waits).
+- Gold voltage, how stock does it (first-project/ref clk-cpu-osm.c, cprh-kbss-regulator.c, sdm660 dtsi):
+  the rail is PM660 S2 (FT) + S3 (HF), S1 is Silver; their SPMI channels (53, 66, 27) belong to the
+  application CPU, so we can write them; CPRh/OSM hardware does it in stock and is not reachable from
+  EL1. Above 872 mV the array power mux must go from MX to APC first: mode register 0x179d0010 = 2,
+  status 0x179d0018 & 0x1f == 3 (Silver: 0x179d0004 / 0x179d000c). Not done yet: set 872 mV, switch the
+  APM, set 948 mV, then L 115 - with a temperature limit, since heat grows.

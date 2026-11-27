@@ -15,7 +15,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usblog  # noqa: E402
 
-ANSWER = re.compile(rb"^(LV (?:PEEK|PMIC|GOLD|USB)[^\n]*)$", re.M)
+ANSWER = re.compile(rb"^(LV (?:PEEK|PMIC|GOLD|RPM|POKE|USB)[^\n]*)$", re.M)
 
 
 def main():

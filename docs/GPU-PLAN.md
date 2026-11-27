@@ -220,3 +220,23 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     (m2, real 300 MHz) had 14 hangs + backboardd SIGSEGV after each, while boots without it had 0 hangs in
     6 benches. To check: what user space does with MAX_FREQ, and how the stock rail (CX level per gfx
     corner: 0x100 for 588 MHz, 0x140 for 647) really gets raised.
+- CORRECTION (2026-11-27, late night, xnu 1162, runs n1-n3): the GPU clock is **not** the limit either, and
+  600 MHz does not lack voltage.
+  - 600 MHz set live (`lv:poke 5066074 501`, `lv:poke 5066070 3`) or at boot with `lv_gpu_mhz=600` alone:
+    0 hangs in 4 benches, no artefacts, CX (PM660L S3) 852-856 mV as at 300 MHz. fps do not move:
+    home 15.6-16.8 (15.2 at 300), Settings 49.4-50.1 (50.3 at 300).
+  - The hangs of m2 / m3 came with `gpu_mhz=600` (TopazAdreno: on lavender it only changes the MAX_FREQ
+    reported to user space): 2 boots with it hung, 3 without it did not. Do not pass it; why user space
+    hangs on it is open.
+  - So neither the Gold clock (1401..2208 MHz) nor the GPU clock (300 / 600 MHz) moves fps: what limits
+    is something that scales with neither - memory traffic or fixed waits in the frame pipeline. The LVM
+    GPU share is computed with the 300 MHz the driver believes (capped at 100 %): at 600 MHz it reads
+    double; to fix (read the gfx3d RCG).
+  - RPM requests on the rails from the host (`lv:rpm rwcx 0 vlvl N`, also rwmx, swen, vfl; stock: CX is
+    resource "rwcx" 0, not smpb3): all acked, PM660L S3 / S5 read the same right after each, but after
+    the series (it included a vote DOWN to level 64) the GPU stopped and the scanned buffer was garbage
+    (user photos, screenshot ui_garb). Never vote a rail down from the host; which request did it is not
+    known (no log was kept). TWRP 3.7.0 for lavender does not start on this phone (black screen), so the
+    Android side is read from the stock kernel sources (first-project/ref).
+  - Gold: 1747 MHz (L 91) is now the default, in the shim and the kernel (`lv_gold_l=115` gives 2208
+    back). Bench at 1747: home 15.2, Settings 50.3, 0 hangs (n2a).
