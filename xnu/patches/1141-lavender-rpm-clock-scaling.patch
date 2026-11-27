@@ -1,0 +1,48 @@
+lavender: RPM clock scaling on (lv_rpm_scale=1) so the DDR vote lv_ddr_khz takes effect (generator: xnu/src/mk_rpmscale.py)
+
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index e443c08..ef62473 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -1125,13 +1125,39 @@ lavender_fw(const char *name, uint32_t *size)
+ static void
+ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+-	uint32_t khz = 0, bench = 0;
++	uint32_t khz = 0, bench = 0, scale = 0;
+ 	PE_parse_boot_argn("lv_ddr_khz", &khz, sizeof(khz));
+ 	PE_parse_boot_argn("lv_ddr_bench", &bench, sizeof(bench));
+-	if (bench != 0 || khz != 0) {
++	PE_parse_boot_argn("lv_rpm_scale", &scale, sizeof(scale));
++	if (bench != 0 || khz != 0 || scale != 0) {
+ 		IOSleep(2000);
+ 		lavender_memcpy_speed("before");
+ 	}
++	if (scale != 0) {
++		/* mk_rpmscale.py: buses kept up in both sets, then clock scaling on (clk0 2 "Enab") */
++		static const struct { uint32_t type, id, khz; } bus[] = {
++			{ 0x316b6c63u /* clk1 */, 1, 200000 },  /* snoc */
++			{ 0x316b6c63u /* clk1 */, 2, 100000 },  /* cnoc */
++			{ 0x316b6c63u /* clk1 */, 0, 50000 },   /* cnoc_periph */
++			{ 0x69786d6du /* mmxi */, 0, 320000 },  /* mmssnoc_axi */
++			{ 0x616b6c63u /* clka */, 2, 150000 },  /* aggre2_noc */
++		};
++		bool bok = true;
++		for (unsigned i = 0; i < sizeof(bus) / sizeof(bus[0]); i++) {
++			bok &= topaz_rpm_write(1, bus[i].type, bus[i].id, RPM_KEY_KHZ, bus[i].khz);
++			bok &= topaz_rpm_write(0, bus[i].type, bus[i].id, RPM_KEY_KHZ, bus[i].khz);
++		}
++		if (khz != 0) {
++			bok &= topaz_rpm_write(1, RPM_MEM_CLK, 0, RPM_KEY_KHZ, khz);
++		}
++		bool sok = bok && topaz_rpm_write(1, 0x306b6c63u /* clk0 */, 2, 0x62616e45u /* Enab */, 1) &&
++		    topaz_rpm_write(0, 0x306b6c63u /* clk0 */, 2, 0x62616e45u /* Enab */, 1);
++		LOG("LVDDR bus votes %s, RPM clock scaling %s", bok ? "ok" : "FAILED", sok ? "ON" : "not on");
++		if (khz == 0) {
++			IOSleep(100);
++			lavender_memcpy_speed("after scaling on");
++		}
++	}
+ 	if (khz != 0) {
+ 		bool ok = topaz_rpm_write(0, RPM_MEM_CLK, 0, RPM_KEY_KHZ, khz);
+ 		LOG("LVDDR vote %u kHz -> %s", khz, ok ? "acked" : "FAILED");
