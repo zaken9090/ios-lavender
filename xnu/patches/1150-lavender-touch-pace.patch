@@ -1,0 +1,68 @@
+lavender: with a finger down touch reads each report on its edge, not every 8 ms (generator: xnu/src/mk_touchpace.py)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index bd8c144..68b8586 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -344,6 +344,14 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 	int edge = 1;
+ 	unsigned quiet = 0, edges = 0;
+ 	PE_parse_boot_argn("sweettouch_edge", &edge, sizeof(edge));
++	/* lavender: with a finger down, each report as its edge comes (xnu/src/mk_touchpace.py) */
++	uint32_t down_ms = 1, down_max = 30, since = 0, sessions = 0, session_reports = 0;
++	uint64_t session_start = 0;
++	PE_parse_boot_argn("sweettouch_down_ms", &down_ms, sizeof(down_ms));
++	PE_parse_boot_argn("sweettouch_down_max", &down_max, sizeof(down_max));
++	if (down_ms == 0 || down_ms > 8) {
++		down_ms = 1;
++	}
+ 	if (edge) {
+ 		pin_wr(lt.irq, 8, (3u << 5) | (1u << 4) | (1u << 2) | (1u << 1));     /* KPSS, raw status, rising edge */
+ 		pin_wr(lt.irq, 0xc, 0);
+@@ -359,13 +367,19 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 					printf("SWEET TOUCH: first edge latched\n");
+ 				}
+ 			}
+-			due = latched || any_down || ++quiet >= 20;
++			if (any_down) {
++				since += down_ms;
++				due = latched || since >= down_max;
++			} else {
++				due = latched || ++quiet >= 20;
++			}
+ 		} else {
+ 			/* A report waits while the line is low; after the last finger lifts, read once more. */
+ 			due = !line_high(lt.irq) || any_down;
+ 		}
+ 		if (due) {
+ 			quiet = 0;
++			since = 0;
+ 			if (i2c_read(NVT_ADDR, 0x00, r, NVT_REPORT_LEN) == 0) {
+ 				lt.reports++;
+ 				if ((int64_t)lt.reports <= lt.diag || (lt.diag && lt.reports % 200 == 0)) {
+@@ -377,12 +391,24 @@ touch_thread(void *arg __unused, wait_result_t wr __unused)
+ 				printf("SWEET TOUCH: read failed\n");
+ 				i2c_recover();
+ 			}
++			bool was_down = any_down;
+ 			any_down = false;
+ 			for (unsigned f = 0; f < NVT_FINGERS; f++) {
+ 				any_down |= lt.down[f];
+ 			}
++			if (edge && any_down) {
++				if (!was_down) {
++					session_start = mach_absolute_time();
++					session_reports = 0;
++				}
++				session_reports++;
++			} else if (edge && was_down && sessions < 3) {
++				uint64_t ns;
++				absolutetime_to_nanoseconds(mach_absolute_time() - session_start, &ns);
++				printf("SWEET TOUCH: touch %u: %u reports in %llu ms\n", ++sessions, session_reports, ns / 1000000);
++			}
+ 		}
+-		touch_sleep_ms(any_down ? 8 : 12);
++		touch_sleep_ms(any_down ? (edge ? down_ms : 8) : 12);
+ 	}
+ }
+ 
