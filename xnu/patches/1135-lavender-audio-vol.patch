@@ -1,0 +1,38 @@
+lavender: audio - speaker volume 0 at start, audio_vol (generator: xnu/src/mk_audio17.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index 84c38bd..729410e 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1511,12 +1511,20 @@ lv_snd_running(bool on)
+ 	snd_want = on;
+ }
+ 
++static int32_t snd_vol = -1;                    /* percent, from audio_vol (default 0: silent at start) */
++
+ extern "C" void
+ lv_snd_play(const int16_t *frames, uint32_t count)
+ {
+ 	if (snd_lock == NULL || !snd_on) {
+ 		return;
+ 	}
++	if (snd_vol < 0) {
++		uint32_t v = 0;
++		(void)PE_parse_boot_argn("audio_vol", &v, sizeof(v));
++		snd_vol = v > 100 ? 100 : (int32_t)v;
++		LOG("A9: speaker volume %d%% (audio_vol)", snd_vol);
++	}
+ 	IOLockLock(snd_lock);
+ 	for (uint32_t i = 0; i < count; i++) {
+ 		if (snd_tail - snd_head >= SND_FIFO) {
+@@ -1524,8 +1532,8 @@ lv_snd_play(const int16_t *frames, uint32_t count)
+ 			snd_over++;
+ 		}
+ 		uint32_t at = snd_tail++ % SND_FIFO;
+-		snd_fifo[2 * at] = frames[2 * i];
+-		snd_fifo[2 * at + 1] = frames[2 * i + 1];
++		snd_fifo[2 * at] = (int16_t)(frames[2 * i] * snd_vol / 100);
++		snd_fifo[2 * at + 1] = (int16_t)(frames[2 * i + 1] * snd_vol / 100);
+ 	}
+ 	IOLockUnlock(snd_lock);
+ }
