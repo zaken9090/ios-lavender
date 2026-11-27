@@ -89,7 +89,7 @@ jobs:
         run: |
           set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O2"
+          CC="$(xcrun --sdk iphoneos -f clang) -target arm64-apple-ios16.0 -isysroot $SDK -O1"
           M=build-mesa/out
           mkdir -p out
           python3 gpu/mkeagl.py gpu/eagl_slots.txt $M/gl.xml $M/exported-gl.txt gpu/eagl.c > gpu/eagl_gen.h
