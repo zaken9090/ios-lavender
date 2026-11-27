@@ -142,3 +142,7 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - Hangs: 3 boots with sweetprof= (pf3, nz1, pf6) hung or lost lv:shot later; without it (nz2) stable.
   sweetprof stays diagnostic only (opt-in); cause not found (last lines: failed contiguous scans + zone_gc,
   which also show in good runs).
+- Red corner (user photos 2026-11-27): a red square with a white quarter circle at the panel's top-left,
+  on the boot logo and on a hung screen. Not in iOS's frames (no red there in any lv:shot); so it is in the
+  buffer VIG0 shows when no iOS frame is (console shadow / splash). Not drawn by the shim (text only) nor by
+  our patches (no such colour); next: dump that buffer's corner, check ABL's layer mixer / border colour.
