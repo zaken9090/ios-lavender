@@ -214,3 +214,4 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | 1112 | BT | IPR RXSTALE_LAST | no effect alone; real fix was 1113 | kept (as Linux msm_serial; not proven needed) |
 | 1116 (SPMI part) | audio | read PM660L codec ids at SID 3 over the SPMI observer | hung the system | behind audio_spmi=1 (1117) |
 | 1126 (SMMU part) | audio | LPASS SMMU S2CR bypass for SID 1 | hypervisor turned it into fault (0x20000); first ADSP buffer access hung the phone | replaced by a context bank with M=0 (1127) |
+| 1130 | audio | clean tone buffers from CPU cache (dc civac) | SD0 still low in that run; data seen in a later run (t6) - cache not proven the cause | kept (needed for DMA anyway) |
