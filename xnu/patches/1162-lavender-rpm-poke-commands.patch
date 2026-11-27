@@ -1,0 +1,112 @@
+lavender: lv:rpm TYPE ID KEY VALUE and lv:poke HEXADDR HEXVALUE from the host (generator: xnu/src/mk_rpmcmd.py)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 2fdabea..ea6e57f 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -809,6 +809,94 @@ ud_peek(const char *arg, bool pmic)
+ 	printf("LV PEEK %#llx:%s\n", addr, line);
+ }
+ 
++/* lavender: lv:rpm TYPE ID KEY VALUE, lv:poke HEXADDR HEXVALUE (xnu/src/mk_rpmcmd.py) */
++extern bool topaz_rpm_write(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);   /* TopazRpm.cpp */
++
++/* a name of 1-4 letters as the RPM spells it (first letter in the low byte); NULL when there is none */
++static const char *
++ud_fourcc(const char *s, uint32_t *v)
++{
++	uint32_t x = 0;
++	int n = 0;
++
++	while (*s == ' ') {
++		s++;
++	}
++	for (; *s != 0 && *s != ' ' && n < 4; s++, n++) {
++		x |= (uint32_t)(uint8_t)*s << (8 * n);
++	}
++	*v = x;
++	return n != 0 && (*s == ' ' || *s == 0) ? s : NULL;
++}
++
++/* a number, decimal or 0x hex */
++static const char *
++ud_value(const char *s, uint64_t *v)
++{
++	int d = 0;
++
++	while (*s == ' ') {
++		s++;
++	}
++	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
++		return ud_hex(s, v);
++	}
++	if (ud_numbers(s, &d, 1) != 1) {
++		return NULL;
++	}
++	*v = (uint64_t)d;
++	while (*s >= '0' && *s <= '9') {
++		s++;
++	}
++	return s;
++}
++
++static void
++ud_rpm(const char *arg)
++{
++	uint32_t type = 0, key = 0;
++	uint64_t id = 0, value = 0;
++	const char *s = ud_fourcc(arg, &type);
++
++	if (s == NULL || (s = ud_value(s, &id)) == NULL || (s = ud_fourcc(s, &key)) == NULL || ud_value(s, &value) == NULL) {
++		printf("LV USB: bad lv:rpm (TYPE ID KEY VALUE)\n");
++		return;
++	}
++	bool ok = topaz_rpm_write(0, type, (uint32_t)id, key, (uint32_t)value);
++	printf("LV RPM %c%c%c%c %u %c%c%c%c %u: %s\n", (char)type, (char)(type >> 8) ? (char)(type >> 8) : ' ',
++	    (char)(type >> 16) ? (char)(type >> 16) : ' ', (char)(type >> 24) ? (char)(type >> 24) : ' ', (uint32_t)id,
++	    (char)key, (char)(key >> 8) ? (char)(key >> 8) : ' ', (char)(key >> 16) ? (char)(key >> 16) : ' ',
++	    (char)(key >> 24) ? (char)(key >> 24) : ' ', (uint32_t)value, ok ? "acked" : "FAILED");
++}
++
++static void
++ud_poke(const char *arg)
++{
++	static uint64_t page_pa;
++	static vm_offset_t page_va;
++	uint64_t addr = 0, value = 0;
++	const char *rest = ud_hex(arg, &addr);
++
++	if (rest == NULL || ud_hex(rest, &value) == NULL) {
++		printf("LV USB: bad lv:poke (HEXADDR HEXVALUE)\n");
++		return;
++	}
++	addr &= ~3ull;
++	if (page_va == 0 || page_pa != (addr & ~0xfffull)) {
++		page_pa = addr & ~0xfffull;
++		page_va = ml_io_map((vm_offset_t)page_pa, 0x1000);
++	}
++	if (page_va == 0) {
++		printf("LV POKE %#llx: map failed\n", addr);
++		return;
++	}
++	volatile uint32_t *reg = (volatile uint32_t *)(page_va + (addr & 0xfff));
++	uint32_t old = *reg;
++	*reg = (uint32_t)value;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	printf("LV POKE %#llx: %08x -> %08x, reads back %08x\n", addr, old, (uint32_t)value, *reg);
++}
++
+ static void
+ ud_rx_done(void)
+ {
+@@ -852,6 +940,10 @@ ud_rx_done(void)
+ 		ud_peek(cmd + 8, false);
+ 	} else if (strncmp(cmd, "lv:pmic ", 8) == 0) {
+ 		ud_peek(cmd + 8, true);
++	} else if (strncmp(cmd, "lv:rpm ", 7) == 0) {
++		ud_rpm(cmd + 7);
++	} else if (strncmp(cmd, "lv:poke ", 8) == 0) {
++		ud_poke(cmd + 8);
+ 	} else if (strncmp(cmd, "lv:gold ", 8) == 0) {
+ 		int l = 0;
+ 		if (ud_numbers(cmd + 8, &l, 1) != 1 || lv_gold_set_l((uint32_t)l) == -1) {

@@ -324,17 +324,30 @@ static int gold_set_l(u32 l)
     return 0;
 }
 
+/*
+ * The clock the Gold cores are left at: lv_gold_l=L in the payload's command line (the kernel reads the
+ * same argument, xnu/src/mk_goldclock.py), 91 = 1747 MHz when absent. 1747 MHz is the top the stock
+ * table runs at the voltage the boot loader leaves (868 mV); 2208 MHz (L 115) wants 948 mV on this chip
+ * (docs/HARDWARE.md "CPU clocks, voltages, sensors").
+ */
+static u32 gold_target_l(void);
+
 static void gold_clock_ladder(void)
 {
-    static const u8 steps[] = { 58, 80, 96, 115 };
+    u8 steps[4];
+    u32 nsteps = 0, target = gold_target_l();
     u64 ref = stress_sum();
     u32 good = 0;
+
+    for (u32 l = 58; l < target && nsteps < 3; l += (l == 58 ? 22 : 16))     /* 58, 80, 96 below the target */
+        steps[nsteps++] = (u8)l;
+    steps[nsteps++] = (u8)target;
 
     kprintf("OSM clk cfg %x, Gold RCG cfg %x\n", (u64)rd32(OSM_CLK_CFG), (u64)rd32(GOLD_RCG_CFG));
     rcg_update(OSM_CLK_CMD, OSM_CLK_CFG, (1u << 8) | 2u);       /* 200 MHz, as the Linux OSM driver sets it */
     kprintf("OSM clk 200 MHz: Gold %d MHz\n", cpu_mhz());
 
-    for (u32 i = 0; i < sizeof steps; i++) {
+    for (u32 i = 0; i < nsteps; i++) {
         kprintf("L %d: ", (u64)steps[i]);
         if (gold_set_l(steps[i])) {
             fg = RED;
@@ -506,6 +519,27 @@ static int have_payload(void)
         if (_payload[i] != (u8)magic[i])
             return 0;
     return 1;
+}
+
+static u32 gold_target_l(void)
+{
+    static const char key[] = "lv_gold_l=";
+    const char *c = ((const struct payload *)_payload)->cmdline;
+    u32 l = 91;
+
+    for (int i = 0; have_payload() && i < 600 && c[i]; i++) {
+        int k = 0;
+        while (key[k] && c[i + k] == key[k])
+            k++;
+        if (!key[k] && (i == 0 || c[i - 1] == ' ')) {
+            u32 v = 0;
+            for (const char *d = c + i + k; *d >= '0' && *d <= '9'; d++)
+                v = v * 10 + (u32)(*d - '0');
+            if (v >= 58 && v <= 115)
+                l = v;
+        }
+    }
+    return l;
 }
 
 /* ---- entry points ---- */
