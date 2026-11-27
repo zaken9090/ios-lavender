@@ -176,3 +176,11 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   sampled surface sum missed redraws -> patch_sumfull.py, full sum by default (glsumfull=0: sample);
   0/12 and 0/8 shots after. Userland 46017997725 (nd1): Settings 55.9-57.2 fps slow drag, 0 hangs.
   tools/ghost.ps1: Settings short drags with shots.
+- CORRECTION (same evening): lv:shot sent the scanned buffer over ~0.5 s while CoreAnimation reused it,
+  so shots in motion mixed frames; the "stale bands" that turned glpreserve off were that. 1156 makes
+  lv:shot wait (presenter frozen until sent; lv_shot_freeze=0: old) - but frozen frames also upset CA's
+  buffer cycle, so shots during a freeze still showed doubled rows while the user saw none by eye.
+  Judge motion artefacts by eye/video. User (sm1: kernel 1156, userland 46025789290, glpreserve=1):
+  Settings scrolling by finger fine without screenshots. glpreserve is ON by default again
+  (patch_nopreserve.py removed). patch_sumfull.py now: full sum below 1 MB (glsummb), sample above -
+  the whole-surface sum made the home screen judder (wallpaper-sized surfaces).
