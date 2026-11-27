@@ -107,3 +107,22 @@ Read from the phone screen after `fastboot boot` of `shim/` (probe builds v1 and
 Gold clock sequence (register meanings from the Linux `clk-cpu-osm` driver and the first attempt's notes):
 PLL at 0x17816000 (+0 mode, +4 L, rate = L x 19.2 MHz, +0x2c bit 16 = locked); Gold RCG cfg 0x17811054,
 cmd 0x17811050, source 4 = GPLL0, 3 = own PLL. Park on GPLL0, write mode 0, L, mode 2, 6, 7, wait for lock, switch back.
+
+## CPU clocks, voltages, sensors (measured under iOS, xnu 1160/1161, 2026-11-27)
+
+Read with the LVCPU / LVPMIC report, `lv:peek`, `lv:pmic` (tools/lvcmd.py) and the stock DT.
+
+| Item | Value |
+|---|---|
+| Cores under iOS | 4 x Kryo 260 Gold (MIDR 0x51af8002), all four measured at 2207.9 MHz (PMU cycle counter); Silver off |
+| Speed bin | fuse 0x784130 = 0x3040008c, bits 31:29 = **1**: Gold table 300 / 1113.6 / 1401.6 / 1747.2 / 1958.4 / 2150.4 / **2208** MHz (L 58, 73, 91, 102, 112, 115); Silver top 1843.2 |
+| Gold PLL | mode 7, L 115, locked; RCG cfg 0x301 (source 3, div 1); OSM clock cfg 0x102 (200 MHz) |
+| CPU rails | PM660 S1 872 mV, S2 868 mV, S3 868 mV (FTS426, registers 0x40/0x41 = mV): not RPM regulators in the DT, so the APC rails (S2/S3; which is Gold is not known yet) and probably the modem's. SAW4 status (0x17812c18, 0x17912c18) reads 0: CPRh never ran, the rails sit where XBL left them |
+| Stock voltage, Gold (this chip's fuses, rows 69/70 at 0x784228, + DT adjustment) | open loop: SVS 1113 MHz 700 mV, SVS+ 1401 MHz 755, NOM 1747 MHz 827, TURBO 2150 MHz 937, TURBO_L2 **2208 MHz 948 mV**; corner ceilings 724..1068, floors 588..844; APM threshold 872 mV |
+| So | at 868 mV stock would allow about 1900 MHz (interpolated); 2208 MHz runs **80 mV under** the stock open-loop voltage. It has been stable so far (checksum runs in the shim, days of iOS), but with no known margin |
+| Other rails | PM660L S1 1128 mV, S2 1016-1040 (changes between boots), S3 848 (CX, RPM smpb3), S5 908 (MX); PM660 S4 1840, S5 1328, S6 792 |
+| TSENS map (stock DT) | sensor 1 = Silver cluster, 3/4/5/6 = Gold cores 0-3, 8 = GPU; stock msm-thermal: core limit 70 C, hotplug 105 C, reset 115 C. We have no throttling |
+| Charger / fuel gauge | PM660 charges on its own: SDP, input limit 500 mA (0x1370 = 0x14), FCC 2 A, float 4.395 V. Fuel gauge 0x41A0.. gives V and I: idle -100 mA (charging), bench +450..530 mA (the battery drains under load on a PC port). iOS still shows the static 100 % (SweetBattery reads topaz addresses) |
+
+Gold clock at run time (xnu 1161): `lv:gold L` over USB or boot-arg `lv_gold_l=L`, the same park / relock / switch
+sequence; measured after each change (1747.1 and 1401.5 MHz at L 91 and 73).

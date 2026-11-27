@@ -249,3 +249,19 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | patch_solid.py, patch_imageof.py | GPU/CPU | glsolid (first project) and an image_of index | no change in backboardd ms a frame | removed (userland 45999741177) |
 | 1157 | display | sweetfb_gpucopy=1: GPU frames copied by the CPU into our flip buffer (test of "iOS draws into the scanned buffer") | the copy from write-combined GPU memory is far too slow: frames stalled, black screen (gc1) | test inconclusive; remove in the next cleanup |
 | patch_bbdfull.py | display | CA_DISABLE_DIRTY_REGIONS=1 for backboardd (stale keyboard band at the bottom of the App Library, user video 18-58-15) | draws a frame unchanged (26.1 -> 27.0): the variable does not change how CA renders here | removed |
+
+## New open items (2026-11-27 night: cores and clocks, docs/HARDWARE.md "CPU clocks, voltages, sensors")
+
+- **Gold runs 2208 MHz at the boot voltage (868 mV); stock would use 948 mV open loop for this chip.**
+  Either raise the rail (which of PM660 S2/S3 is Gold, SPMI write ownership, APM threshold 872 mV and
+  mem-acc level 3 for the top corner must be handled) or run what 868 mV carries by the stock table
+  (1747 MHz, L 91: Settings -4..-6 %, home unchanged). `lv_gold_l=91` does the second today.
+- **GPU clock is the fps limit** and 600 MHz hangs: the rail vote does not raise PM660L S3. Fix the rail
+  first (read it back with LVPMIC), then 465/588/600 MHz, then DVFS ([[redmi-gpu-dvfs-planned]]).
+- `gpu_mhz` (TopazAdreno, cosmetic on lavender) and `lv_gpu_mhz` (TopazRpm, the real one) are two names
+  for one thing: make them one.
+- No thermal control at all (stock: core limit 70 C, hotplug 105 C). With `lv_gold_set_l` a simple
+  step-down above a limit is now possible.
+- Battery: SweetBattery reports a static 100 % (topaz fuel-gauge addresses); the PM660 gauge is readable
+  (0x41A0 V, 0x41A2 I). Under load on a PC port the battery drains (input limit 500 mA).
+- backboardd / SpringBoard CPU does not scale with the core clock: profile the App Library scroll.

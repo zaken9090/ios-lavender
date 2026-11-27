@@ -195,3 +195,28 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   backlight on until reboot. Seen with userland 46025789290 / 46040112491; 46027949301 + xnu 1159 gave
   4 clean benches (rb2) - known-good for now. Next: a stronger recovery (GPU power cycle when the soft
   reset does not get the CP going) and the hang's cause (still open since 1139).
+- Metrics (xnu 1160/1161, 2026-11-27 night, kernel run-46053107226 + userland 46027949301): a line a second
+  with every core's load, the load average, the Gold clock, core/GPU temperatures, **GPU busy share**
+  (RBBM_PERFCTR_RBBM_0, countable 6), submissions, recoveries, memory, battery V/I (LVM), CPU by process
+  (LVP), measured core clocks (LVK); tools/metrics.py (table, CSV), bench line with a summary per phase,
+  tools/lvcmd.py for `lv:peek` / `lv:pmic` / `lv:gold`. What they show (runs m1, m4a, m4L91/73/115):
+
+  | Gold clock | home (App Library) | Settings slow drag |
+  |---|---|---|
+  | 2208 MHz | 13.5-14.2 fps, GPU 94-99 %, CPU 234-256 % | 50.8-52.4 fps, GPU 71-76 %, CPU 219-259 % |
+  | 1747 MHz | 13.9 fps, GPU 97 % | 49.3 fps, GPU 73 % |
+  | 1401 MHz | 14.0 fps, GPU 97 %, CPU 250 % | 47.3 fps, GPU 69 % |
+
+  - **The GPU (300 MHz) is the limit**: the home phase does not move with the CPU clock at all, Settings
+    loses 8 % for 37 % less clock. In Settings the GPU works 13.8 ms a frame (71 % at 51.6 fps): no room
+    for 60 at 300 MHz. Home: the GPU is busy all the time and each frame waits 55 ms for it.
+  - CPU use does not follow the clock either: backboardd 110-138 %, SpringBoard 88 % (home) at any of the
+    three clocks. Its work is not bound by the core clock (memory traffic or waiting busily) - to profile
+    (sweetprof) in the App Library.
+  - Heat 55-62 C in the bench, 42-47 C idle; battery +450..530 mA out under load, -100 mA idle.
+  - 600 MHz for the GPU does not work now: `lv_gpu_mhz=600` votes rail level 0x180 (acked) but PM660L S3
+    stays 848 mV (LVPMIC), the GPU hung at fence 22 and the second recovery failed (m3). `gpu_mhz=600`
+    alone (TopazAdreno) only changes the reported MAX_FREQ on lavender, not the clock - and that boot
+    (m2, real 300 MHz) had 14 hangs + backboardd SIGSEGV after each, while boots without it had 0 hangs in
+    6 benches. To check: what user space does with MAX_FREQ, and how the stock rail (CX level per gfx
+    corner: 0x100 for 588 MHz, 0x140 for 647) really gets raised.
