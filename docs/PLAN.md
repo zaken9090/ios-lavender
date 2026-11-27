@@ -16,7 +16,11 @@ memory it moves. No picture quality may be traded.
    no upload for a surface that is fully redrawn).
 3. Fixed waits in the frame path (fence polling, presenter) once the traffic is down.
 
-## P2 - safety: temperature
+4. (found 2026-11-28) 87 % of display frames are drawn in the surface the panel still shows. Fix: one
+   canvas CoreAnimation draws into + three scanout buffers the finished frame is copied to
+   (GPU-PLAN.md, 2026-11-28). This replaces the preserve copy and is the next piece of work.
+
+## P2 - safety: temperature (done: xnu 1165)
 
 No thermal control exists (stock: core limit 70 C, hotplug 105 C, reset 115 C). A step-down of the Gold
 clock above a limit (lv_gold_set_l, TSENS in LavenderMetrics) with a boot-arg for the limits.

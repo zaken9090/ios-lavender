@@ -276,3 +276,27 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   at 1113 MHz the bench gave home 15.0, Settings 48.7.
   Open: boot r2 (same kernel, default limits) stopped answering over USB ~50 s after the UI was up
   (host writes time out, then no log); r1 and q1 ran their benches. Cause not known yet.
+- 2026-11-28 night, kernel run-46071568759 (to 1166: recovery halts the VBIF before the reset, tries
+  twice) + userland 46074724297 (patch_damage.py: glpreserve=2, glinuse=MS, in-use counter).
+  - Where the pixels go: a plain frame passes exactly one screen (2.76 M at 60 fps), so the counter is
+    real. Without the preserve copy (glpreserve=0, s1): Settings 20.0 -> 18.0 Mpx, 51.0 -> 53.7 fps;
+    home 56 -> 51.5 Mpx, 13.7 -> 15.6 fps. The copy is ~10 % of the work; the rest is CoreAnimation's.
+  - glpreserve=2 (copy only the box the other surface lacks): first version changed nothing (most
+    frames' first draw has the scissor off: 3355 of 4207 display frames, box 0,0 1125x2436 in 835)
+    and left orange/pink bands behind icon labels on the home screen (user video 23-56-56). Second
+    version (no copy when the scissor is off, the complement of the box otherwise) is built but not
+    judged yet. Opt-in only; default is the whole copy.
+  - **87 % of display frames begin in a surface the panel still shows** (4328 of 4970, bench v1a:
+    IOSurfaceIsInUse at the frame's first draw into a display surface). CoreAnimation has two display
+    surfaces; SwapEnd returns at once, so it starts frame N+1 in the surface that is on the panel until
+    frame N has latched. The preserve copy and the draws happen in view: the trembling / lagging
+    bottom of the screen, the torn first rows of a scroll, likely the stale band at the bottom.
+  - glinuse=20 (wait until the display lets the surface go): Settings 50.3 -> 32.8 fps (the frames no
+    longer overlap), home unchanged (14). Proves the cause; not a fix.
+  - Plan for the fix: CoreAnimation draws into one canvas that is never scanned (no preserve copy
+    needed: it always holds the last frame); at the frame's end the canvas is copied (one screen, what
+    the preserve copy costs today) into one of three scanout buffers that is neither on the panel nor
+    waiting, and that buffer is shown. Needs eagl (texture substitution, end-of-frame copy) and the
+    kernel (three scanout buffers, "show this one for the surface swapped").
+  - s2 boot (gltrace_draws=11): three GPU hangs, the third recovery failed (old code), garbled picture
+    (user video 23-35-46). r2 boot: USB stopped answering once; did not repeat in 8 later boots.
