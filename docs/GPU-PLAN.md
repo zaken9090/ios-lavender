@@ -184,3 +184,9 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   Settings scrolling by finger fine without screenshots. glpreserve is ON by default again
   (patch_nopreserve.py removed). patch_sumfull.py now: full sum below 1 MB (glsummb), sample above -
   the whole-surface sum made the home screen judder (wallpaper-sized surfaces).
+- App Library pulled down (user video 18-58-15): when the search keyboard slides away, some frames keep
+  an old picture of the keyboard at the bottom (the bottom flicker; also Settings overscroll, switcher).
+  CA_DISABLE_DIRTY_REGIONS=1 for backboardd: no change in draws a frame (removed). glpreservelog +
+  lv_swaplog (xnu 1158, userland 46040112491; run pl1): 161 of 163 preserve copies go between the two
+  swapped display surfaces (2<->4), 2 copy the frame into display-sized offscreen targets never shown
+  (2->95, 2->109: snapshots? the switcher's purple cards?). Open: the stale keyboard band itself.
