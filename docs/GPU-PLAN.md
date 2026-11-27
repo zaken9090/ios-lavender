@@ -152,3 +152,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - Known-good now: kernel run-45979058523 (to 1149), userland 45999741177 (nano malloc in the backboardd
   wrapper; glsolid and image_of removed: no gain), boot-args as before. Bench cl/clb/clc: home 27.3-27.8,
   Settings 51-57, 0 GPU hangs; screenshots clean. sweetprof's "hangs" were all on -O2 userland.
+- Bench (tools/bench.py) now drags slowly like a finger by default (2 s drags, first project's bench.sh);
+  --fast = the old flicks. lv:swipe steps every 8 ms (xnu 1151, lv_swipe_ms). Slow-drag numbers (g0b-d,
+  kernel 1151, userland 46003048295 with glzero=0): home 13.4-13.9, Settings 51.6-53.2, 0 hangs.
+- xnu 1150 (sweettouch_down_ms=1, sweettouch_down_max=30): with a finger down, touch reads each report
+  when its edge comes (was every 8 ms on its own clock: uneven steps, judder with a slow real finger).
+- glzero (patch_zero.py, first project 125fe46): 2 GPU hangs then a stall in the first boot (z1); with
+  glzero=0 stable. Off until reworked (the shade still flickers).
