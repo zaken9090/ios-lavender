@@ -1,0 +1,36 @@
+lavender: boot-arg lv_kmsg_sig=0 - Mach messages not SHA-256 signed/checked, default on (generator: xnu/src/mk_kmsgsig.py)
+
+diff --git a/osfmk/ipc/ipc_kmsg.c b/osfmk/ipc/ipc_kmsg.c
+index b4d1276..773f593 100644
+--- a/osfmk/ipc/ipc_kmsg.c
++++ b/osfmk/ipc/ipc_kmsg.c
+@@ -702,6 +702,9 @@ ikm_body_sig(
+ 	}
+ }
+ 
++/* lavender: lv_kmsg_sig=0 - no signature made or checked (xnu/src/mk_kmsgsig.py) */
++static TUNABLE(bool, lv_kmsg_sig, "lv_kmsg_sig", true);
++
+ static void
+ ikm_sign(ipc_kmsg_t kmsg)
+ {
+@@ -709,6 +712,9 @@ ikm_sign(ipc_kmsg_t kmsg)
+ 	uintptr_t sig;
+ 
+ 	zone_require(ipc_kmsg_zone, kmsg);
++	if (!lv_kmsg_sig) {
++		return;
++	}
+ 
+ 	ikm_init_sig(kmsg, &scratch);
+ 
+@@ -764,6 +770,9 @@ ikm_validate_sig_internal(
+ 	char *str;
+ 
+ 	zone_require(ipc_kmsg_zone, kmsg);
++	if (!lv_kmsg_sig) {
++		return;
++	}
+ 
+ 	ikm_init_sig(kmsg, &scratch);
+ 
