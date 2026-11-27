@@ -190,3 +190,8 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   lv_swaplog (xnu 1158, userland 46040112491; run pl1): 161 of 163 preserve copies go between the two
   swapped display surfaces (2<->4), 2 copy the frame into display-sized offscreen targets never shown
   (2->95, 2->109: snapshots? the switcher's purple cards?). Open: the stale keyboard band itself.
+- GPU hangs again on 2026-11-27 evening, now sometimes NOT recovered ("recovery FAILED: RBBM_STATUS
+  c00003c1 rptr 0 wptr 9", rb1; ag1 hung at fence 98 with STATUS3 0x00500000): black screen with the
+  backlight on until reboot. Seen with userland 46025789290 / 46040112491; 46027949301 + xnu 1159 gave
+  4 clean benches (rb2) - known-good for now. Next: a stronger recovery (GPU power cycle when the soft
+  reset does not get the CP going) and the hang's cause (still open since 1139).
