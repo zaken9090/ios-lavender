@@ -1,0 +1,17 @@
+lavender: audio A4b - tone buffers cleaned out of the CPU cache (generator: xnu/src/mk_audio12.py)
+
+diff --git a/iokit/Kernel/arm/TopazAudio.cpp b/iokit/Kernel/arm/TopazAudio.cpp
+index d894108..ae35953 100644
+--- a/iokit/Kernel/arm/TopazAudio.cpp
++++ b/iokit/Kernel/arm/TopazAudio.cpp
+@@ -1628,6 +1628,10 @@ a4b_buffers(void)
+ 		}
+ 	}
+ 	LOG("A4b: tone %u Hz, peak %u", freq, level);
++	for (uintptr_t a = (uintptr_t)a4_va; a < (uintptr_t)a4_va + A4_BUF_N * 4096u; a += 64) {
++		__asm__ volatile ("dc civac, %0" :: "r"(a) : "memory");     /* to DRAM: the ADSP reads there */
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
+ 	__asm__ volatile ("dsb sy" ::: "memory");
+ 	LOG("A4b: 4 tone buffers at %#llx", a4_pa);
+ 	return true;
