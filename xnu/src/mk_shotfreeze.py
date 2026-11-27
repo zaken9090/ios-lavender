@@ -44,6 +44,9 @@ sub('''		ud.shot_pending = true;''', '''		ud.shot_pending = true;
 			PE_parse_boot_argn("lv_shot_freeze", &freeze, sizeof(freeze));
 		}
 		sweet_shot_busy = freeze;''')
+import re
+m = re.search(r'^#include [^\n]*\n', s, re.M)
+s = s[:m.end()] + 'extern volatile int sweet_shot_busy;    /* lavender: mk_shotfreeze.py */\n' + s[m.end():]
 open(path, 'w', newline='\n').write(s)
 
 path = f'{tree}/iokit/Kernel/arm/SweetFramebuffer.cpp'

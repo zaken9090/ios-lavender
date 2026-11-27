@@ -1,10 +1,18 @@
 lavender: lv:shot freezes the presenter until sent, exact frames (generator: xnu/src/mk_shotfreeze.py)
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
-index fe409f5..0efb212 100644
+index fe409f5..c992765 100644
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -753,6 +753,12 @@ ud_rx_done(void)
+@@ -18,6 +18,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++extern volatile int sweet_shot_busy;    /* lavender: mk_shotfreeze.py */
+ extern void thread_set_thread_name(struct thread *th, const char *name);       /* lavender: mk_kthreadnames.py */
+ #include <sys/systm.h>
+ #include <kern/clock.h>
+@@ -753,6 +754,12 @@ ud_rx_done(void)
  		ud_reboot_bootloader();
  	} else if (strcmp(cmd, "lv:shot") == 0) {
  		ud.shot_pending = true;
@@ -17,7 +25,7 @@ index fe409f5..0efb212 100644
  	} else if (strncmp(cmd, "lv:time ", 8) == 0) {
  		ud_set_time(cmd + 8);
  	} else if (strncmp(cmd, "lv:tap ", 7) == 0) {
-@@ -778,6 +784,9 @@ ud_rx_done(void)
+@@ -778,6 +785,9 @@ ud_rx_done(void)
   */
  static volatile uint32_t *ud_vig0;        /* lavender: MDP VIG0, what the panel shows (xnu/src/mk_shot.py) */
  
@@ -27,7 +35,7 @@ index fe409f5..0efb212 100644
  static bool
  ud_tx_shot(void)
  {
-@@ -813,6 +822,7 @@ ud_tx_shot(void)
+@@ -813,6 +823,7 @@ ud_tx_shot(void)
  		return true;
  	}
  	if (ud.shot_left == 0) {
