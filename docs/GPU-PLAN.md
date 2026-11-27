@@ -93,3 +93,21 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - Home fps varies a lot between runs (8.8-28.6) with the same setup: the bench's home phase is not stable.
 - Userland (first project ea74d71/e157d39/877dd11): dock and search pill correct again (were white/yellow).
 - Settings shot during scrolling shows doubled text; lv:shot mixes frames in motion, static shots are clean.
+
+## Kernel CPU, App Library (2026-11-27, kernels 1142-1145)
+
+- 1142/1144: `sweetsample=kernel_task` prints SMT lines (CPU ms of each kernel thread per round, name, stack);
+  our driver threads are named after their functions.
+- 1143 (`sweetfb_latch_sleep`, default 1): the presenter slept 100 us at a time for the MDP latch (~16% of a
+  core while drawing); now it sleeps until ~200 us before the panel frame ends (INTF_1 line counter; panel
+  frame measured from its frame counter: ~6.8 ms, 148 Hz). Presenter out of the top list.
+- 1145 (`sweettouch_edge`, default 1): the NT36672A event line rests low and pulses high, so touch read 65
+  bytes of bit-banged I2C every 12 ms forever (11% idle, 26% touched). TLMM now latches the rising edge
+  (INTR_CFG 0x76, no GIC); read on edge, finger down, or every 250 ms. Idle kernel_task 14% -> 6%
+  of a core, touch_thread 2%. Real fingers not yet checked by the user (injected taps bypass the chip).
+- Home phase of the bench now swipes into the App Library (Suggestions filled): 13-16 fps on every kernel
+  incl. 1143 again (l2) - phone state, not a regression. backboardd frames there take 2-5 ms; GPU 600 MHz
+  (m1: 14.5-16), lower DDR (d1b: 13.3) and GMEM (g1: 9.0, Settings 33) do not move it. The limit is
+  upstream of the GPU (CA commits); SpringBoard stacks need a symbolicated shared cache (not set up).
+- glgmem=1 measured again: slower (home 9, Settings 33-34) - rejected on speed as well.
+- Lower DDR (1017600): Settings 58 -> 38-44, so Settings is memory-bound; keep 1804800.
