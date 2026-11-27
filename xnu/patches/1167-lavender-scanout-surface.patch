@@ -1,0 +1,80 @@
+lavender: a swapped surface can name the surface shown in its place (IOSurface value lv-show) (generator: xnu/src/mk_scanout.py)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index 1c5c5a1..d1a6f2c 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -970,6 +970,43 @@ sweet_fps_count(void)
+ void
+ AppleCLCD::swap(const uint8_t *rec)
+ {
++	/*
++	 * lavender (mk_scanout.py): a surface that names another one ("lv-show") is shown as that one -
++	 * the finished frame's copy, which CoreAnimation never draws into.
++	 */
++	uint8_t shownRec[SWEET_FB_SWAP_REC_SIZE];
++	static int show = -1;
++	if (show < 0) {
++		show = 1;
++		PE_parse_boot_argn("sweetfb_show", &show, sizeof(show));
++	}
++	if (show != 0) {
++		bool changed = false;
++		memcpy(shownRec, rec, sizeof(shownRec));
++		for (uint32_t i = 0; i < 4 && i < SWEET_FB_LAYERS; i++) {
++			uint32_t sid = get32(shownRec, 0x54 + 4 * i);
++			SweetSurface *s = sid != 0 ? sweet_surface_copy(sid) : NULL;
++			uint32_t other = s != NULL ? s->showID : 0;
++			SweetSurface *z = other != 0 && other != sid ? sweet_surface_copy(other) : NULL;
++			if (z != NULL && z->gpuPool && z->width == s->width && z->height == s->height) {
++				static uint32_t told;
++				memcpy(&shownRec[0x54 + 4 * i], &other, sizeof(other));
++				changed = true;
++				if (told++ < 3) {
++					IOLog("SWEET FB: surface %u is shown as surface %u (lv-show)\n", sid, other);
++				}
++			}
++			if (z != NULL) {
++				z->release();
++			}
++			if (s != NULL) {
++				s->release();
++			}
++		}
++		if (changed) {
++			rec = shownRec;
++		}
++	}
+ 	sweet_fps_count();
+ 	/* lavender: lv_swaplog=N (xnu/src/mk_swaplog.py) */
+ 	static int swaplog = -1;
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index ee705eb..e2e2af1 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -1527,6 +1527,10 @@ IOSurfaceRootUserClient::valueCall(uint32_t selector, IOExternalMethodArguments
+ 		OSDictionary *all = array != NULL ? OSDynamicCast(OSDictionary, array->getObject(0)) : NULL;
+ 		if (array != NULL && array->getCount() == 2 && key != NULL && array->getObject(0) != NULL) {
+ 			s->values->setObject(key, array->getObject(0));
++			if (key->isEqualTo("lv-show")) {                /* lavender: mk_scanout.py */
++				OSNumber *show = OSDynamicCast(OSNumber, array->getObject(0));
++				s->showID = show != NULL ? show->unsigned32BitValue() : 0;
++			}
+ 			ret = kIOReturnSuccess;
+ 		} else if (array != NULL && array->getCount() == 1 && all != NULL) {
+ 			s->values->merge(all);
+diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
+index 566b1ea..53a07b0 100644
+--- a/iokit/Kernel/arm/SweetSurface.h
++++ b/iokit/Kernel/arm/SweetSurface.h
+@@ -52,8 +52,9 @@ public:
+ 	char                      creator[20];  /* lavender: the creating process (xnu/src/mk_surfstat.py) */
+ 	SweetSurface             *allNext, *allPrev;    /* lavender: every live surface, for the SMS line */
+ 	uint32_t                  drawn;        /* topaz GPU: last submission naming this surface (RedwoodGPU.cpp) */
++	uint32_t                  showID;       /* lavender: IOSurface value "lv-show" - the surface shown in this one's place (mk_scanout.py) */
+ 
+-	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; gpuPool = false; poolSize = 0; creator[0] = 0; arenaChunk = -1; arenaFirst = arenaUnits = 0; allNext = allPrev = NULL; return OSObject::init(); }
++	bool init() APPLE_KEXT_OVERRIDE { scanoutPhys = 0; scanoutSlot = -1; values = NULL; purgeable = 0; wrapDelta = 0; wrapped = false; drawn = 0; showID = 0; gpuPool = false; poolSize = 0; creator[0] = 0; arenaChunk = -1; arenaFirst = arenaUnits = 0; allNext = allPrev = NULL; return OSObject::init(); }
+ 	void free() APPLE_KEXT_OVERRIDE;
+ 
+ 	/* Kernel address of the pixels (mapped on first use), or 0. */
