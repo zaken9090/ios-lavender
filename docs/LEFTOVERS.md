@@ -177,6 +177,12 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 
 ## New open items (2026-11-27 evening)
 
+- Lock screen flickers after Power (user video 19-59-57: red poster <-> pale picture ~4 times a second):
+  AegirPoster (the Photos poster extension) aborts on an uncaught exception thrown in a FrontBoardServices
+  serial-queue block, again and again (pw1: 6 crashes), each relaunch swapping poster/placeholder. The
+  first project answered PLPrivacy "allowed" in topaz-inject (assetsd/AegirPoster, ad84f5d) because tccd
+  did not see the private TCC entitlement (our AMFI stand-in) - a workaround; the cause to fix is the
+  entitlement. Exception text: sweetscan=AegirPoster (not caught yet: it starts after mediaanalysisd).
 - webbookmarksd crash loop (6 in 7 min, run lg1): uncaught exception in an XPC async reply handler
   (objc_terminate <- _dispatch_client_callout3 <- mach_msg_async_reply). Next: sweetscan=webbookmarksd.
   Run ph1 (sweetscan=webbookmarksd, idle 3 min): no crash - it comes with some UI action.
