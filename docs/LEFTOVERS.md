@@ -194,7 +194,7 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 
 ## Cleanup done
 
-- **1138** (mk_cleanup1.py, not yet checked on the phone): 1056 MSA zeroing and the 1081/1082 persist
+- **1138** (mk_cleanup1.py; runs c1138/h1139: Wi-Fi MAC from NV, modem, BT, audio up): 1056 MSA zeroing and the 1081/1082 persist
   ext4 reader removed; opt-in now: `modem_wlrails=1` (1054 rails readback), `qmux_log=N` (default 0),
   `abp_log=1` (1059 call log; `abp=1` keeps the power hook), `sweettouchdiag=N` (default 0),
   `lv_ddr_bench=1` (1008 memcpy; also with `lv_ddr_khz`), `sweetsample=NAMES` (sampler off without it).

@@ -64,3 +64,15 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
    f. Picture correctness: framebuffer-fetch emulation, blur fixes (glsync, glpreserve, ds8).
    g. Later: 750x1624 scaled scanout (1028/1029), vsync rate (1033), ipc speed (1035).
 9. Later: SMMU translation, interrupts, GPU clock 600+ MHz (GX voltage vote), render straight into display surfaces.
+
+## GPU hang (xnu 1139, 2026-11-27)
+
+- Seen in 11 logs: "TopazGPU: no answer", RBBM_STATUS 0x8..001c1 / 0xc50801c3 (HI, RAS, RB, PC_DCALL
+  busy: a draw that never ends), CP_HW_FAULT 0, SMMU no fault; afterwards every submit failed with -60
+  (ETIMEDOUT, ring full): black or frozen screen, power key dead (run c1138: hang at fence 13, lock screen).
+- 1139: full dump at a hang (IB2, STATUS3, scratch, ring at rptr, IB1/IB2 dwords; gpu_hangdump=0 off) and
+  recovery as Linux a5xx_recover (RBBM_SW_RESET_CMD 0x43, CP restarted, fences written done; gpu_recover=0
+  off, at most 20 a boot). Run h1139r1: hang at fence 2918 inside an IB2 of 2782 dwords (rem 2094,
+  CP done fetching IB1) -> "recovery done", UI went on (33 fps, 465 submissions / 5 s), home screen fine.
+- Open: the cause (a draw in backboardd's IB2; decode the IB2 from the dump), RBBM_STATUS after the reset
+  still 0xc00003c1.
