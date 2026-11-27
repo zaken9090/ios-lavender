@@ -179,9 +179,12 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 
 - webbookmarksd crash loop (6 in 7 min, run lg1): uncaught exception in an XPC async reply handler
   (objc_terminate <- _dispatch_client_callout3 <- mach_msg_async_reply). Next: sweetscan=webbookmarksd.
+  Run ph1 (sweetscan=webbookmarksd, idle 3 min): no crash - it comes with some UI action.
 - Bottom-of-screen flicker: a stale picture of the search keyboard in App Library frames (user video);
   also Settings overscroll and the switcher. preserve copies are right (pl1), source unknown.
-- App switcher: left cards purple (not glzero). 2 preserve copies into never-shown display-sized
+- App switcher: left cards purple (not glzero). Injected swipes do not open the switcher even with
+  xnu 1159 lv:swipe HOLD (ph1): the user's finger needed for checks.
+- (was) App switcher: left cards purple (not glzero). 2 preserve copies into never-shown display-sized
   targets (2->95, 2->109) - check whether these are the cards' snapshots.
 - BT headset: bluetoothd crashes in the A2DP Skywalk pipe (BT-PLAN).
 
