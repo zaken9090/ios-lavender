@@ -454,3 +454,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   adding them up - exact and no memory reads; safe for IOSurface-owned wired memory only (clearing the
   bit on pageable client memory can make the VM drop dirty pages), so first count summed bytes by kind
   (wrapped client memory vs own).
+- 2026-11-28 13:20, what bounds the home bench (it drags into the App Library: a full-screen blur every
+  frame): the GPU passes ~700 Mpx/s at 300 MHz (ak1: 21.4 fps x 33.0 Mpx) and ~805-830 Mpx/s at 600 MHz
+  (ak3, ap1 LVG rbpass) - a fixed pixel rate through memory, RB stalled on its FIFO ~72 % and on the
+  CCU ~19 % of its busy time, SP 91 % busy with 27 % ALU work. Trace ac2 by blending (tools/tracearea.py):
+  ~80 % of the pixels are drawn with blending off, so the destination read is not the main cost. a5_hw_init
+  matches Linux's A509/A512 branches (UCHE ways, CP thresholds, ECO bits, hbb). Next with the phone:
+  glsumstat=1 (userland 46138626617) and a fresh per-draw trace of an App Library frame.
