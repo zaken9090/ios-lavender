@@ -1,0 +1,178 @@
+lavender: iOS gets the battery from the PM660 fuel gauge (lv_battery=0: static as before) (generator: xnu/src/mk_battery.py)
+
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index ed9a0c7..72b4f53 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -20,6 +20,8 @@ extern "C" int sweet_i2c1_init(void);
+ extern "C" int sweet_cpufreq_max(void);    /* bsd/dev/sweet_cpufreq.c */
+ extern "C" int sweet_i2c1_read(uint8_t addr, uint8_t reg, uint8_t *buf, unsigned len);
+ extern "C" int sweet_i2c1_write(uint8_t addr, uint8_t reg, uint8_t val);
++/* bsd/dev/sweet_usb.c: one PMIC byte under the SPMI lock (lavender, patch 1163) */
++extern "C" int lv_pmic_byte(int write, unsigned addr, uint8_t *val);
+ 
+ class SweetBattery : public IOPMPowerSource {
+ 	OSDeclareDefaultStructors(SweetBattery);
+@@ -31,7 +33,7 @@ public:
+ private:
+ 	IOWorkLoop *fLoop;
+ 	IOTimerEventSource *fTimer;
+-	bool fTimerAdded, fRunning, fReal;
++	bool fTimerAdded, fRunning, fReal, fLavender;
+ 	int fLastMode;
+ 	void putNumber(const char *key, UInt32 value);
+ 	void putBool(const char *key, bool value);
+@@ -39,6 +41,9 @@ private:
+ 	    bool capable, bool charging, bool full, bool measured, bool currentValid);
+ 	void poll(void);
+ 	bool pollTopaz(void);
++	bool pollLavender(void);
++	unsigned fDesign;
++	int fTenths;                    /* battery temperature, 0.1 C (lavender) */
+ 	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+ 	static IOReturn stopPolling(OSObject *owner, void *, void *, void *, void *);
+ 	static bool readWord(unsigned address, uint16_t *value);
+@@ -57,7 +62,9 @@ SweetBattery::init(OSDictionary *dictionary)
+ 	}
+ 	fLoop = NULL;
+ 	fTimer = NULL;
+-	fTimerAdded = fRunning = fReal = false;
++	fTimerAdded = fRunning = fReal = fLavender = false;
++	fDesign = 5020;
++	fTenths = 250;
+ 	if (dictionary) {
+ 		OSCollectionIterator *it = OSCollectionIterator::withCollection(dictionary);
+ 		if (!it) {
+@@ -108,10 +115,10 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+     bool capable, bool charging, bool full, bool measured, bool currentValid)
+ {
+ 	/* Use consistent mAh units (DT nominal=5020). powerd computes C*100/M. */
+-	const unsigned capacity = (5020u * percent + 50u) / 100u;
++	const unsigned capacity = (fDesign * percent + 50u) / 100u;
+ 	setBatteryInstalled(true);
+ 	setCurrentCapacity(capacity);
+-	setMaxCapacity(5020);
++	setMaxCapacity(fDesign);
+ 	setExternalConnected(external);
+ 	setExternalChargeCapable(capable);
+ 	setIsCharging(charging);
+@@ -125,15 +132,15 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	putBool("FullyCharged", full);
+ 	putBool("AppleRawExternalConnected", external);
+ 	putNumber("AppleRawCurrentCapacity", capacity);
+-	putNumber("AppleRawMaxCapacity", 5020);
+-	putNumber("DesignCapacity", 5020);
++	putNumber("AppleRawMaxCapacity", fDesign);
++	putNumber("DesignCapacity", fDesign);
+ 	putNumber("InstantAmperage", (UInt32)ma);
+ 	/* iOS battery convention: centidegrees C; fixed 25 C, NOT measured. */
+-	putNumber("Temperature", 2500);
++	putNumber("Temperature", (UInt32)(fTenths * 10));
+ 	putBool("SweetBatteryHardwareSampleValid", measured);
+ 	putBool("SweetBatteryCurrentValid", currentValid);
+ 	putBool("SweetBatterySOCEstimated", measured);
+-	putBool("SweetBatteryTemperatureEstimated", true);
++	putBool("SweetBatteryTemperatureEstimated", !fLavender);
+ 	putBool("SweetBatteryFallback", !measured);
+ 	putNumber("SweetBatteryPercent", percent);
+ 
+@@ -143,7 +150,7 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 		const char *keys[] = {kIOBatteryCurrentChargeKey, kIOBatteryCapacityKey,
+ 		    kIOBatteryVoltageKey, kIOBatteryAmperageKey, kIOBatteryCycleCountKey,
+ 		    kIOBatteryFlagsKey};
+-		UInt32 values[] = {capacity, 5020, mv, (UInt32)ma, 0,
++		UInt32 values[] = {capacity, fDesign, mv, (UInt32)ma, 0,
+ 		    (UInt32)(kIOBatteryInstalled | (external ? kIOBatteryChargerConnect : 0) |
+ 		    (charging ? kIOBatteryCharge : 0))};
+ 		for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+@@ -160,7 +167,7 @@ SweetBattery::publish(unsigned percent, unsigned mv, int ma, bool external,
+ 	int mode = measured ? 1 : 0;
+ 	if (mode != fLastMode) {
+ 		IOLog("SWEET BATTERY: %s, %u%% %umV external=%d charging=%d\n",
+-		    measured ? "PM6150 / estimated SOC" : "static fallback",
++		    !measured ? "static fallback" : fLavender ? "PM660 fuel gauge" : "PM6150 / estimated SOC",
+ 		    percent, mv, external, charging);
+ 		fLastMode = mode;
+ 	}
+@@ -369,9 +376,56 @@ SweetBattery::pollTopaz(void)
+ 	return true;
+ }
+ 
++/* lavender (mk_battery.py): the PM660 fuel gauge and charger, read only */
++bool
++SweetBattery::pollLavender(void)
++{
++	static const unsigned at[] = { 0x4009, 0x4150, 0x4151, 0x41a0, 0x41a1, 0x41a2, 0x41a3, 0x1006, 0x1310 };
++	uint8_t v[sizeof(at) / sizeof(at[0])];
++	static unsigned logs;
++
++	for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++) {
++		if (lv_pmic_byte(0, at[i], &v[i]) != 0) {
++			return false;
++		}
++	}
++	unsigned msoc = v[0];
++	int kelvin4 = ((v[2] & 3) << 8) | v[1];
++	int mv = (int)(int16_t)(v[3] | (v[4] << 8)) * 12207 / 100000;
++	int ma = (int)((int64_t)(int16_t)(v[5] | (v[6] << 8)) * 488281 / 1000000);
++	unsigned state = v[7] & 7u;
++	bool external = (v[8] & 0x10u) != 0;
++
++	if (mv < 2800 || mv > 4600 || kelvin4 == 0) {
++		return false;                   /* (a gauge not running yet: not 0 %) */
++	}
++	unsigned percent = msoc == 0 ? 0 : ((msoc - 1) * 98u + 252u) / 253u + 1u;
++	if (percent > 100) {
++		percent = 100;
++	}
++	bool full = external && state == 5;
++	bool charging = external && state <= 4;
++	fTenths = ((kelvin4 + 2) / 4 - 273) * 10;
++	fDesign = 4000;
++	/* IOPMPowerSource: positive = into the battery */
++	publish(full ? 100 : percent, (unsigned)mv, -ma, external, external, charging, full, true, true);
++	if (logs++ % 30 == 0) {
++		IOLog("SWEET BATTERY: PM660 %u%% (msoc %u) %d mV %d mA %d.%d C charger %u usb %d\n", full ? 100 : percent, msoc, mv, -ma,
++		    fTenths / 10, fTenths % 10, state, external);
++	}
++	return true;
++}
++
+ void
+ SweetBattery::poll(void)
+ {
++	if (fLavender && pollLavender()) {
++		return;
++	}
++	if (fLavender) {
++		publish(100, 4200, 0, true, true, false, true, false, false);
++		return;
++	}
+ 	if (fReal && pollTopaz()) {
+ 		return;
+ 	}
+@@ -438,10 +492,13 @@ SweetBattery::start(IOService *provider)
+ 	(void)sweet_cpufreq_max();
+ 	int real = 1;   /* topaz: real gauge by default; sweetbattery=0 for the static fallback */
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
+-	fReal = real == 1 && sweet_i2c1_init() == 0;
++	int lavender = 1;       /* lavender (mk_battery.py): the PM660 gauge; lv_battery=0 for what was before */
++	(void)PE_parse_boot_argn("lv_battery", &lavender, sizeof(lavender));
++	fLavender = lavender != 0;
++	fReal = !fLavender && real == 1 && sweet_i2c1_init() == 0;
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();
+-	if (fReal) {
++	if (fReal || fLavender) {
+ 		fLoop = IOWorkLoop::workLoop();
+ 		fTimer = IOTimerEventSource::timerEventSource(this, &SweetBattery::timerFired);
+ 		if (fLoop && fTimer && fLoop->addEventSource(fTimer) == kIOReturnSuccess) {
+@@ -449,7 +506,7 @@ SweetBattery::start(IOService *provider)
+ 			fRunning = true;
+ 			fTimer->setTimeoutMS(10000);
+ 		} else {
+-			fReal = false;
++			fReal = fLavender = false;
+ 			poll();
+ 			IOLog("SWEET BATTERY: timer unavailable; static fallback\n");
+ 		}
