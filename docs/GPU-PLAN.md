@@ -545,3 +545,18 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     back to fastboot.
   - xnu 1175 now writes S3 only and checks S2 follows; xnu 1176 adds 885 / 937 / 948 mV for 1958 / 2150 /
     2208 MHz through the mux (lv_cpu_volt=1 lv_cpu_volt_hi=1). Both off by default, not run yet.
+- 2026-11-28 18:50, the Gold rail from the kernel (kernel run-46150089038 = to 1176; runs bd1, be1-be3, bf1-bf2):
+  - bd1 (lv_cpu_volt=2): S3 written 864 mV in one write under the SPMI lock: S2 and S3 864 / 864, back to
+    868: fine.
+  - **be1-be3 (lv_cpu_volt=1): the rail follows the clock down, three benches, no failure**: 768 mV at
+    1113 MHz, 828 at 1747, 868 from 1958 up ("| 768 mV mx" 25 s, 828 2 s, 868 135 s). Settings 58.9 / 58.0 /
+    56.4 fps, late 5.7 / 6.0 / 10.5 % (flicks) - as without it; 54-59 C.
+  - **bf1-bf2 (lv_cpu_volt=1 lv_cpu_volt_hi=1): NOT stable.** The mux answered (status 3) and 2208 MHz ran at
+    "948 mV apc", but in that boot backboardd died twice, the GPU stopped answering 7 times (recovered
+    each time: "rec 7/0"), the benches fell apart (home 9 fps over 3 s) and after ~2 minutes the kernel
+    stopped (USB device still listed, no lines, no answer to lv:fastboot) - the user's keys again.
+    Corrupted work on the cores, not heat (66-71 C). Suspects: the array supply is switched while the
+    cores run at 1113 MHz from their PLL (msm8996's APM driver moves the CPU clock source to GPLL0
+    around the switch: "clock source override"; the OSM does the switch inside its own sequence), or
+    memory settings for the top corner that we do not know (the OSM table's last column: 1 at 1113 MHz,
+    2 up to 2150, 3 at 2208). lv_cpu_volt_hi stays off; 2208 MHz stays on 868 mV, where it has been stable.
