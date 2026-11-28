@@ -594,3 +594,12 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   low-priority processes: they do not get to check in in time. Nothing starts the widget again in the
   next five minutes. On an iPhone this is what the efficiency cores are for (PLAN S2), besides a lighter
   boot (the AegirPoster crash loop, ReportCrash).
+- 2026-11-28 21:20, **known-good: kernel run-46156626975 (to 1176, rail modes default) + userland
+  46157593238 (patch_quietlog.py; installed)**. bn1 / bn2 with the default kernel: "948 mV apc acc 3" with no
+  boot-arg, no crash - but a bad boot (Settings 49.9 / 49.1 fps, 12.0 / 10.4 % late) although the tick
+  comes from the panel: so not the tick. In bn2 nine of the ten seconds with a 110-200 ms frame gap are
+  the seconds in which backboardd wrote eagl's every-200-frames summary (~60 lines from the drawing
+  thread); memory state and the poster crash loop were the same as in good boots. patch_quietlog.py:
+  the periodic eagl lines only with gllog=1. Four boots after it (bo1, bp1, bq1, br1; first bench of
+  each boot, busy): Settings 56.9 / 58.9 / 58.6 / 58.9 fps, late 10.0 / 7.1 / 6.4 / 9.4 % - no bad boot
+  in four (they were 4 of ~18 before; not yet proof).
