@@ -388,3 +388,16 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - 2026-11-28 03:50, bench ad1 (kernel run-46090709916, userland 46094073971 = glskip + noastc by
   default): home 21.0 fps, 34.4 Mpx, memory wait 232 cyc, texture misses 22 %; Settings 58.0 fps,
   20.5 Mpx, 277 cyc, 25 %; 0 GPU hangs. Switcher cards right without boot-args (ui_ad1_switcher.png).
+- 2026-11-28 06:50, **canvas: no preserve copy** (userland/gpu/patch_canvas.py, glcanvas=0: off).
+  Once CA's two display surfaces have taken turns 8 times, every texture CA has of either of them is
+  one texture (glBindTexture / glFramebufferTexture2D are given the canvas for those names), so a frame
+  starts from the last one without the full-screen copy. Bench ag1 (kernel run-46090709916, userland
+  46108278919): home 21.2 fps, 33.2 Mpx, memory wait 223 cyc, texture misses 21 %; Settings 58.0 fps,
+  17.1 Mpx (was 20.5), 246 cyc, 25 %; 0 GPU hangs; ~57-60 canvas frames a second, no frame left
+  outside. Lock screen with the fading "swipe up" label clean (ui_ag1_n2.png). The copy out also runs
+  with the scissor off now (CA leaves it on with its last box in 16 of 159 frames, run ag2) - a likely
+  cause of stale bands, to be confirmed by eye.
+  Per-frame lines (glframes=1, run ag2): 143 of 159 display frames begin with the scissor off over
+  the whole surface - CA redraws the whole screen nearly every frame, so copying out only the boxes
+  drawn (patch_scandamage, tried) saves nothing (100 % in every second). Home stays GPU-bound (95 %):
+  the next lever is the memory path of CA's own passes (GMEM / tiled rendering without flicker).

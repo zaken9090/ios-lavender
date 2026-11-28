@@ -319,6 +319,20 @@ sub('''	e->attaching += now_us() - began;
 	}
 	if (attached++ < 24) {''')
 
+# ---- the copy out is of the whole frame: glBlitFramebuffer obeys the scissor test, and at a frame's end
+#      CoreAnimation may have left it on with the box of its last draw (16 of 159 frames, run ag2)
+sub('''		glBlitFramebuffer(0, 0, image->width, image->height, 0, image->invert ? image->height : 0, image->width,
+		    image->invert ? 0 : image->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);''', '''		{
+			GLboolean boxed = glIsEnabled(GL_SCISSOR_TEST);         /* lavender: patch_canvas.py */
+
+			glDisable(GL_SCISSOR_TEST);
+			glBlitFramebuffer(0, 0, image->width, image->height, 0, image->invert ? image->height : 0, image->width,
+			    image->invert ? 0 : image->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			if (boxed) {
+				glEnable(GL_SCISSOR_TEST);
+			}
+		}''')
+
 # ---- the generated table passes arguments on by the library's names
 sub('''#define EAGL_GEN_TABLE
 #include "eagl_gen.h"''', '''#undef glBindTexture                    /* lavender: patch_canvas.py */

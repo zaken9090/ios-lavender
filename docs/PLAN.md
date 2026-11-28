@@ -21,6 +21,8 @@ memory it moves. No picture quality may be traded.
    (0 % in view, fps unchanged). Next here: the 7-20 screens of pixels a frame and the 0.85 us memory wait.
 5. (done 2026-11-28, patch_flushwho.py) the display copy is put off at CA's mid-frame glFlush
    (glskip, default c0x1884b62e0): home 14.6 -> 20.6 fps, 51 -> 32.5 Mpx a frame.
+6. (done 2026-11-28, patch_canvas.py) both display surfaces drawn in one texture: no preserve copy;
+   Settings 20.5 -> 17.1 Mpx, home 21.2 fps. Next: GMEM / tiled rendering without flicker.
 
 ## P2 - safety: temperature (done: xnu 1165)
 
