@@ -119,9 +119,38 @@ lv_gpu_dvfs_loop(void)
 	}
 }
 
+static void
+lv_gpu_dvfs_thread(__unused void *arg, __unused wait_result_t w)
+{
+	lv_gpu_dvfs_loop();
+}
+
+/* TopazAdreno.cpp, once the GPU is ready: lv_gpu_dvfs=1 starts the loop in a thread of its own */
+extern "C" void
+lavender_gpu_dvfs_start(void)
+{
+	uint32_t dvfs = 0;
+	thread_t thread;
+	PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
+	if (dvfs && kernel_thread_start(lv_gpu_dvfs_thread, NULL, &thread) == KERN_SUCCESS) {
+		thread_set_thread_name(thread, "lavender_gpu_dvfs");
+		thread_deallocate(thread);
+	}
+}
+
 extern "C" void
 lavender_perf_start(void)
 {''')
+
+ad = f'{tree}/iokit/Kernel/arm/TopazAdreno.cpp'
+patch(ad, '''	lv_metrics_start();                             /* LavenderMetrics.cpp (lv_metrics=0 off) */
+''', '''	lv_metrics_start();                             /* LavenderMetrics.cpp (lv_metrics=0 off) */
+	lavender_gpu_dvfs_start();                      /* TopazRpm.cpp (lv_gpu_dvfs=1; mk_gpudvfs.py) */
+''')
+patch(ad, '''bool redwood_gpu_counters(uint64_t *out, uint32_t count);
+''', '''bool redwood_gpu_counters(uint64_t *out, uint32_t count);
+void lavender_gpu_dvfs_start(void);
+''')
 
 patch(r, '''		if (gpu >= 11) {
 			lavender_gpu_cp();
@@ -131,11 +160,7 @@ patch(r, '''		if (gpu >= 11) {
 ''', '''		if (gpu >= 11) {
 			lavender_gpu_cp();
 		}
-		uint32_t dvfs = 0;
-		PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
-		if (gpu >= 11 && dvfs) {
-			lv_gpu_dvfs_loop();             /* (never returns: this thread's work is done) */
-		}
+
 	}
 }
 ''')
