@@ -186,6 +186,13 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 - webbookmarksd crash loop (6 in 7 min, run lg1): uncaught exception in an XPC async reply handler
   (objc_terminate <- _dispatch_client_callout3 <- mach_msg_async_reply). Next: sweetscan=webbookmarksd.
   Run ph1 (sweetscan=webbookmarksd, idle 3 min): no crash - it comes with some UI action.
+- 2026-11-28 (run ad1, userland 46094073971): lock screen after Power - first picture right
+  (screenshots/ui_ad1_lock1.png); once the "swipe up to open" label fades, the bottom ~280 rows are
+  redrawn in a flat band of the wrong shade, with a step at the camera button's left edge
+  (ui_ad1_lock2.png): a partial redraw (CA's damage) drawn wrong, likely the same as the item below.
+  No AegirPoster or webbookmarksd crash in that run (Safari opened, lock/unlock); widget and poster
+  extensions still die of "extension check-in timeout" at boot (ScreenTimeWidget, PhotosReliveWidget,
+  LockScreenPeople).
 - Bottom-of-screen flicker: a stale picture of the search keyboard in App Library frames (user video);
   also Settings overscroll and the switcher. preserve copies are right (pl1), source unknown.
 - App switcher: left cards purple (not glzero). Injected swipes do not open the switcher even with

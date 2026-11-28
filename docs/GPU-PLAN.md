@@ -385,3 +385,6 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   (MESA_EXTENSION_OVERRIDE=-GL_KHR_texture_compression_astc_ldr, run ac6) the same cards are right.
   userland/gpu/patch_noastc.py makes that the default (glastc=1: ASTC offered). Open: why the A509
   path decodes ASTC wrong (Mesa fd5 format table or the hardware's ASTC decode mode).
+- 2026-11-28 03:50, bench ad1 (kernel run-46090709916, userland 46094073971 = glskip + noastc by
+  default): home 21.0 fps, 34.4 Mpx, memory wait 232 cyc, texture misses 22 %; Settings 58.0 fps,
+  20.5 Mpx, 277 cyc, 25 %; 0 GPU hangs. Switcher cards right without boot-args (ui_ad1_switcher.png).
