@@ -323,3 +323,18 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - Tiled textures in Mesa (glenv=FD_MESA_DEBUG=sysmem,ttile, run x1): a tear at boot and "many problems
   with the screen" (user); memory wait 216 cycles (255-267 without), texture cache misses 34 % (23-25 %).
   Rejected: picture.
+- 2026-11-28 02:20, copies per shown frame (bench w2a): **9.7 mirror copies for every frame shown on the
+  home screen**, 1.6 in Settings - eagl copies the display frame out at every glFlush / glFinish and
+  CoreAnimation flushes many times a frame. That is ~27 of the 56 Mpx of a home frame. Fix in work
+  (userland/gpu/patch_swaphook.py): copy once, when CoreAnimation swaps (libtopaz-inject interposes
+  IOMobileFramebufferSwapBegin and calls redwood_eagl_before_swap). State: userland 46084039497 -
+  the hook costs time (Settings 43.2 fps, 22.7 Mpx against 50.5 / 19.8) but never puts a copy off and
+  logs nothing (0 put off, 0 at the swap; bench aa1a). Not understood yet. Known-good userland stays
+  46079146807; the phone has 46084039497 installed now.
+- Opening Messages by hand (build y1): 15 GPU hangs in a row, 14 recovered (new recovery: bus halt
+  acknowledged, try 1 each time), one failed, backboardd crashed: flicker, tears, a blue screen (user,
+  video 01-48-05). After a first hang the GPU hangs again within 10-30 submissions ("rem 231"). Not
+  reproduced on the confirmed build yet.
+- The night's "USB stopped answering" was an empty battery (3551 mV under load, the phone drains
+  ~500 mA under iOS on a PC port). The phone is parked in fastboot between tests now (quick.ps1 -Park,
+  tools/charge.ps1; bench line shows the lowest mV).
