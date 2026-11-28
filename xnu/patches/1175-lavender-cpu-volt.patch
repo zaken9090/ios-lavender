@@ -1,4 +1,4 @@
-lavender: the Gold rail (PM660 S2 + S3) follows the Gold clock, downwards only; two-byte SPMI writes (lv_cpu_volt=1; default off; generator: xnu/src/mk_cpuvolt.py)
+lavender: the Gold rail (PM660 S3 master + S2) follows the Gold clock, downwards only; two-byte SPMI writes (lv_cpu_volt=1; default off; generator: xnu/src/mk_cpuvolt.py)
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 index 8e56cc2..734206a 100644
@@ -77,7 +77,7 @@ index 8e56cc2..734206a 100644
  static int
  spmi_update(unsigned addr, uint8_t mask, uint8_t bits)
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
-index 995ee9a..44c2444 100644
+index 995ee9a..7d3d95a 100644
 --- a/iokit/Kernel/arm/LavenderMetrics.cpp
 +++ b/iokit/Kernel/arm/LavenderMetrics.cpp
 @@ -26,6 +26,8 @@ vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -127,11 +127,15 @@ index 995ee9a..44c2444 100644
 +	return ((uint32_t)hi << 8) | lo;
 +}
 +
++/*
++ * S3 is the master of the two phases: a set point written to it (both bytes in ONE SPMI write, as Linux's
++ * qpnp-regulator does) shows in S3 and S2 at once; S2 acknowledges writes and ignores them (runs bb1, bc1).
++ */
 +static bool
-+cv_write_one(unsigned which, uint32_t mv)
++cv_write(uint32_t mv)
 +{
-+	/* both bytes in one SPMI write, as Linux's qpnp-regulator does: single bytes were accepted and ignored (run bb1) */
-+	return lv_pmic_word((CV_SID << 16) | (cv_base[which] + 0x40), (uint16_t)mv) == 0 && cv_read(which, 0x40) == mv;
++	return lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)mv) == 0 && cv_read(1, 0x40) == mv &&
++	       cv_read(0, 0x40) == mv;
 +}
 +
 +/* both phases to mv (768..the boot value: the upper byte stays 0x03); false = not done */
@@ -144,9 +148,7 @@ index 995ee9a..44c2444 100644
 +	if (mv == cv_now) {
 +		return true;
 +	}
-+	/* up: S2 (the one XBL's sequence names first) then S3; down: the other way round */
-+	unsigned first = mv > cv_now ? 0 : 1;
-+	if (!cv_write_one(first, mv) || !cv_write_one(first ^ 1, mv)) {
++	if (!cv_write(mv)) {
 +		return false;
 +	}
 +	cv_now = mv;
@@ -178,13 +180,13 @@ index 995ee9a..44c2444 100644
 +	if (mode == 2) {
 +		lv_pmic_owners((CV_SID << 8) | (cv_base[0] >> 8));
 +		lv_pmic_owners((CV_SID << 8) | (cv_base[1] >> 8));
-+		int w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)(s2 - 4));
++		int w = lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)(s2 - 4));
 +		IODelay(2000);
-+		IOLog("LVF rail test: S2 written %u mV in one write (%d): S2 set %u in force %u, S3 set %u in force %u\n", s2 - 4,
++		IOLog("LVF rail test: S3 written %u mV in one write (%d): S2 set %u in force %u, S3 set %u in force %u\n", s2 - 4,
 +		    w, cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
-+		w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)s2);
++		w = lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)s2);
 +		IODelay(2000);
-+		IOLog("LVF rail test: S2 back (%d): S2 set %u in force %u, S3 set %u in force %u\n", w,
++		IOLog("LVF rail test: S3 back (%d): S2 set %u in force %u, S3 set %u in force %u\n", w,
 +		    cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
 +		return;
 +	}
@@ -212,9 +214,7 @@ index 995ee9a..44c2444 100644
 +broken:
 +	/* the boot value back (with the clock where it is or lower, that is always enough), and no more of this */
 +	cv_on = 0;
-+	for (unsigned i = 0; i < 2; i++) {
-+		(void)lv_pmic_word((CV_SID << 16) | (cv_base[i] + 0x40), (uint16_t)cv_boot);
-+	}
++	(void)lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)cv_boot);
 +	IODelay(500);
 +	IOLog("LVF rail: a write failed going L %u -> %u: back to %u mV (S2 %u, S3 %u), voltage steps off\n", from, to, cv_boot,
 +	    cv_read(0, 0x40), cv_read(1, 0x40));

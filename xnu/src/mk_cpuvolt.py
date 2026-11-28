@@ -9,11 +9,13 @@ So with the governor (mk_cpudvfs.py) the rail now goes DOWN with the clock and n
 left: by default 768 mV at 1113 / 1401 MHz, 828 mV at 1747 MHz, the boot value (868) from 1958 MHz up -
 at or above stock for the three lower steps; 2208 MHz stays where it has run for weeks. 768 keeps the
 upper set-point byte at 0x03 for every value: one byte changes, no in-between voltage.
+The set point takes only a two-byte SPMI write to S3, the master phase (S2 follows; single-byte writes and
+writes to S2 are acknowledged and ignored: runs bb1, bc1; S1, the Silver rail, takes its own).
 Up: voltage first, 500 us, then the clock. Down: the clock first, then the voltage. A write that fails
 or does not read back puts the boot value back and turns this off for the boot.
 
   lv_cpu_volt=1         on (default 0 until tested enough)
-  lv_cpu_volt=2         test only: S2 alone 4 mV down, what S2 and S3 then report, back up (are they ganged?)
+  lv_cpu_volt=2         test only: S3 4 mV down, what S2 and S3 then report, back up
   lv_cpu_mv_lo=768      mV at 1113 and 1401 MHz (768..boot)
   lv_cpu_mv_mid=828     mV at 1747 MHz (768..boot)
 The LVF line ends with the rail's set point: "... cap L | R mV".
@@ -53,11 +55,15 @@ cv_read(unsigned which, unsigned reg)
 	return ((uint32_t)hi << 8) | lo;
 }
 
+/*
+ * S3 is the master of the two phases: a set point written to it (both bytes in ONE SPMI write, as Linux's
+ * qpnp-regulator does) shows in S3 and S2 at once; S2 acknowledges writes and ignores them (runs bb1, bc1).
+ */
 static bool
-cv_write_one(unsigned which, uint32_t mv)
+cv_write(uint32_t mv)
 {
-	/* both bytes in one SPMI write, as Linux's qpnp-regulator does: single bytes were accepted and ignored (run bb1) */
-	return lv_pmic_word((CV_SID << 16) | (cv_base[which] + 0x40), (uint16_t)mv) == 0 && cv_read(which, 0x40) == mv;
+	return lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)mv) == 0 && cv_read(1, 0x40) == mv &&
+	       cv_read(0, 0x40) == mv;
 }
 
 /* both phases to mv (768..the boot value: the upper byte stays 0x03); false = not done */
@@ -70,9 +76,7 @@ cv_set(uint32_t mv)
 	if (mv == cv_now) {
 		return true;
 	}
-	/* up: S2 (the one XBL's sequence names first) then S3; down: the other way round */
-	unsigned first = mv > cv_now ? 0 : 1;
-	if (!cv_write_one(first, mv) || !cv_write_one(first ^ 1, mv)) {
+	if (!cv_write(mv)) {
 		return false;
 	}
 	cv_now = mv;
@@ -104,13 +108,13 @@ cv_start(void)
 	if (mode == 2) {
 		lv_pmic_owners((CV_SID << 8) | (cv_base[0] >> 8));
 		lv_pmic_owners((CV_SID << 8) | (cv_base[1] >> 8));
-		int w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)(s2 - 4));
+		int w = lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)(s2 - 4));
 		IODelay(2000);
-		IOLog("LVF rail test: S2 written %u mV in one write (%d): S2 set %u in force %u, S3 set %u in force %u\\n", s2 - 4,
+		IOLog("LVF rail test: S3 written %u mV in one write (%d): S2 set %u in force %u, S3 set %u in force %u\\n", s2 - 4,
 		    w, cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
-		w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)s2);
+		w = lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)s2);
 		IODelay(2000);
-		IOLog("LVF rail test: S2 back (%d): S2 set %u in force %u, S3 set %u in force %u\\n", w,
+		IOLog("LVF rail test: S3 back (%d): S2 set %u in force %u, S3 set %u in force %u\\n", w,
 		    cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
 		return;
 	}
@@ -138,9 +142,7 @@ cv_gold_step(uint32_t from, uint32_t to)
 broken:
 	/* the boot value back (with the clock where it is or lower, that is always enough), and no more of this */
 	cv_on = 0;
-	for (unsigned i = 0; i < 2; i++) {
-		(void)lv_pmic_word((CV_SID << 16) | (cv_base[i] + 0x40), (uint16_t)cv_boot);
-	}
+	(void)lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)cv_boot);
 	IODelay(500);
 	IOLog("LVF rail: a write failed going L %u -> %u: back to %u mV (S2 %u, S3 %u), voltage steps off\\n", from, to, cv_boot,
 	    cv_read(0, 0x40), cv_read(1, 0x40));

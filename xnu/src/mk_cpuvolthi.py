@@ -157,13 +157,7 @@ patch(m, '''	if (cv_on && mv > cv_now) {
 broken:
 	/* the boot value back (with the clock where it is or lower, that is always enough), and no more of this */
 	cv_on = 0;
-	{
-		uint8_t lo = (uint8_t)cv_boot, hi = (uint8_t)(cv_boot >> 8);
-		for (unsigned i = 0; i < 2; i++) {
-			(void)lv_pmic_byte(1, (CV_SID << 16) | (cv_base[i] + 0x40), &lo);
-			(void)lv_pmic_byte(1, (CV_SID << 16) | (cv_base[i] + 0x41), &hi);
-		}
-	}
+	(void)lv_pmic_word((CV_SID << 16) | (cv_base[1] + 0x40), (uint16_t)cv_boot);
 	IODelay(500);
 	IOLog("LVF rail: a write failed going L %u -> %u: back to %u mV (S2 %u, S3 %u), voltage steps off\\n", from, to, cv_boot,
 	    cv_read(0, 0x40), cv_read(1, 0x40));
