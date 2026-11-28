@@ -560,3 +560,20 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     around the switch: "clock source override"; the OSM does the switch inside its own sequence), or
     memory settings for the top corner that we do not know (the OSM table's last column: 1 at 1113 MHz,
     2 up to 2150, 3 at 2208). lv_cpu_volt_hi stays off; 2208 MHz stays on 868 mV, where it has been stable.
+- 2026-11-28 19:40, the Gold rail, continued (kernel run-46150089038):
+  - bg1 (lv_cpu_volt=1): the GPU stopped during boot at frame ~8 (300 MHz, Gold 2208 MHz / 868 mV for the
+    10 s before; "gpu 100 %, sub 0, rec 0/0", no report, no recovery) - the old unrecovered boot hang
+    (PLAN P3), the kernel alive. Not counted against the rail (but note: one of four lv_cpu_volt boots).
+    "Phone dead" was a bench.py of the stopped quick.ps1 still holding the USB device: kill stray python
+    before judging (probably the same in bf2).
+  - bh1-bh3 + idle (lv_cpu_volt=1): clean, 5 minutes with 3 idle. Idle at 768 mV is no different from
+    868 mV: 46-47 C, charging 116-128 mA (was 118-121). The gain of the lower rail is not measurable
+    at idle; it stays off by default.
+  - **bj1 / bj2 (lv_cpu_volt_hi=1, lv_cpu_max_l=102): 1958 MHz at 885 mV on APC is stable** - 81 s at
+    "885 mV apc", the mux going both ways, no crash, rec 0/0. So the mux is not what broke bf1.
+  - What is different at 2208 MHz in stock: the memory setting ("mem-acc") level 3. The OSM's registers
+    (0x179c2000..) read 0x00070000 everywhere (TZ's), but msm8998 - the same KBSS block, same addresses,
+    same APM registers - names them in its DT: qcom,perfcl-apcs-mem-acc-cfg = 0x179d1368 0x179d136c
+    0x179d1370, values 0 0 0x80000000 (level 1) / 0 0 0 (2) / 0 0 1 (3). Here they read 0 0 0: level 2,
+    right for 1401..2150 MHz. xnu 1176 now sets 0x179d1370 = 1 with the 2208 MHz step (at 937 mV, then
+    948), and 0 again on the way down (lv_cpu_acc=0: off, then nothing above 937 mV).
