@@ -13,8 +13,12 @@ Facts (2026-11-28, docs/GPU-PLAN.md):
 Now:
   lv_gpu_mhz=N     a fixed clock: 300 (GPLL0 / 2, the default), 600 (GPLL0 / 1, as before) or any other N
                    up to 647 from GPU PLL0 (588 and 647 are the stock steps)
-  lv_gpu_dvfs=1    the governor (mk_gpudvfs.py) steps between 300 MHz (GPLL0 / 2) and lv_gpu_hi
-  lv_gpu_hi=647    the governor's top clock, from GPU PLL0 kept running (600: GPLL0 / 1 as before)
+  lv_gpu_dvfs=1    the governor (mk_gpudvfs.py) steps between 300 MHz (GPLL0 / 2) and lv_gpu_hi - ON BY
+                   DEFAULT again (lv_gpu_dvfs=0 off): seven boots (bx..cd), ~90 steps up, no stop; the old
+                   way (the divider of one running source) stopped the GPU in 2 of 13 boots
+  lv_gpu_hi=588    the governor's top clock, from GPU PLL0 kept running (600: GPLL0 / 1 as before).
+                   647 MHz locks but the GPU stops within ~20 s (bu1): CX is 848-852 mV whatever level we
+                   vote (others hold it there; rwcx takes no "uv": that request stopped the RPM's replies)
 The CX vote also goes to the stock resource (rwcx 0, swen 1 + vlvl 0x180) - upwards only, and only when a
 clock above 300 MHz is asked for. The LVM line's GPU clock is the real one for any source.
 
@@ -40,7 +44,7 @@ patch(r, '''/* GDSC: clear SW_COLLAPSE, wait for PWR_ON */
  */
 extern "C" volatile uint32_t lv_gpu_now_mhz;    /* the gfx3d clock now (LavenderMetrics.cpp) */
 volatile uint32_t lv_gpu_now_mhz = 300;
-static uint32_t lv_gpu_hi_mhz = 647;            /* lv_gpu_hi: the governor's top clock */
+static uint32_t lv_gpu_hi_mhz = 588;            /* lv_gpu_hi: the governor's top clock */
 static bool lv_gpu_pll_ok;                      /* GPU PLL0 runs at 2 x lv_gpu_hi_mhz */
 
 /* GPU PLL `which` to 2 x mhz and on; false: no lock, left off */
@@ -105,7 +109,7 @@ patch(r, '''	if (mhz >= 600 || dvfs) {
 	}
 	PE_parse_boot_argn("lv_gpu_hi", &lv_gpu_hi_mhz, sizeof(lv_gpu_hi_mhz));
 	if (lv_gpu_hi_mhz <= 300 || lv_gpu_hi_mhz > 647) {
-		lv_gpu_hi_mhz = 647;            /* this chip's bin (fuse 0x7841a0: 0x87) ends at 647 MHz */
+		lv_gpu_hi_mhz = 588;            /* (this chip's bin, fuse 0x7841a0: 0x87, ends at 647 MHz; 647 does not hold: bu1) */
 	}
 ''')
 patch(r, '''		if (mhz >= 600 && en && lv && lvl >= 0x180) {
@@ -202,5 +206,14 @@ patch(m, '''			if (((cfg >> 8) & 7) == 5) {
 patch(m, '''extern "C" volatile uint32_t lv_gpu_hot;        /* TopazRpm.cpp GPU DVFS (mk_gpudvfs.py): 1 = hold 300 MHz */
 ''', '''extern "C" volatile uint32_t lv_gpu_hot;        /* TopazRpm.cpp GPU DVFS (mk_gpudvfs.py): 1 = hold 300 MHz */
 extern "C" volatile uint32_t lv_gpu_now_mhz;    /* TopazRpm.cpp: the gfx3d clock now (mk_gpupll.py) */
+''')
+# the governor on by default again (it was turned off in mk_gpudvfs.py after the hangs of the old stepping)
+patch(r, '''	uint32_t lvl = 0x80, mhz = 300, dvfs = 0;
+''', '''	uint32_t lvl = 0x80, mhz = 300, dvfs = 1;
+''')
+patch(r, '''	uint32_t dvfs = 0;
+	thread_t thread;
+''', '''	uint32_t dvfs = 1;
+	thread_t thread;
 ''')
 print('ok')
