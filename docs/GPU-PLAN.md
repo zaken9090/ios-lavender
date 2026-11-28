@@ -367,3 +367,14 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   21 %, 37.0 C, charging. Opening Messages from the host failed (lv:tap and a held lv:swipe on its
   icon in the dock and the App Library left the screen as it was; the alert's OK took the same tap):
   the hang-storm check still needs the user's finger or a look at why.
+- 2026-11-28 03:30, what a home-screen frame draws (GL trace ac2: gltrace_at=50 gltrace_frames=60,
+  tools/tracearea.py; tools/steps.py drives the phone - it wakes the display first: iOS turns it off
+  after ~10 s idle and the framebuffer keeps the last frame, which is why host taps "did nothing").
+  A shown frame is ~9 flushes. Into the display surface (fb5/fb6, alternating): wallpaper images
+  1326x1160 and 1271x1823 (p5/p29), a 256x1 gradient twice (p14/p96), a full-screen p42 pass, the
+  layer contents. Between them, for every material (dock, search pill, Photos widget, 987x144,
+  704x256, 284x611 surfaces) CA draws what lies below, flushes (the mid-frame flush that glskip now
+  skips copying at), copies that part of the display, blurs it small and puts it back. When the App
+  Library scrolls, a full-size blur runs too (1127x2438, programs 76 and 58, a new texture each time).
+  These passes are CoreAnimation's own; cutting them would change the picture. Ours left per frame:
+  the preserve copy (1 screen) and the copy out to the scanout surface (1 screen) of ~11.
