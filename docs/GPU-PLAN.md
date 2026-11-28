@@ -378,3 +378,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   Library scrolls, a full-size blur runs too (1127x2438, programs 76 and 58, a new texture each time).
   These passes are CoreAnimation's own; cutting them would change the picture. Ours left per frame:
   the preserve copy (1 screen) and the copy out to the scanout surface (1 screen) of ~11.
+- 2026-11-28 03:40, **purple app-switcher cards: cause found and fixed.** The cards of apps not
+  running are snapshots that CA uploads as ASTC 4x4 textures (0x93b0, up to 1125x2436); drawn from
+  the A509's ASTC through Mesa they are tinted purple/pink (run ac5: Phone and Safari cards lavender,
+  live Messages/Settings cards right). With Mesa's ASTC extension hidden
+  (MESA_EXTENSION_OVERRIDE=-GL_KHR_texture_compression_astc_ldr, run ac6) the same cards are right.
+  userland/gpu/patch_noastc.py makes that the default (glastc=1: ASTC offered). Open: why the A509
+  path decodes ASTC wrong (Mesa fd5 format table or the hardware's ASTC decode mode).

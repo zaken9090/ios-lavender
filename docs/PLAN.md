@@ -41,5 +41,5 @@ PM660 S2 + S3 to 872 mV, array power mux to APC (0x179d0010 = 2, status 0x179d00
 ## P5 - functions
 
 Battery level (done: xnu 1168, PM660 fuel gauge; temperature fix in 1168 after bench ab1), AegirPoster crash loop (lock-screen
-flicker), webbookmarksd crash loop, Bluetooth A2DP (Skywalk nexus), stale keyboard band / purple
-switcher cards.
+flicker), webbookmarksd crash loop, Bluetooth A2DP (Skywalk nexus), stale keyboard band; purple switcher cards (done 2026-11-28: ASTC hidden from CA,
+patch_noastc.py).
