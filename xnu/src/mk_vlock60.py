@@ -41,5 +41,14 @@ new = '''	uint32_t next = left + lock_us;
 	return next;
 '''
 assert s.count(old) == 1
+s = s.replace(old, new)
+old = '''	uint32_t lock = 0;
+	fVLock = PE_parse_boot_argn("sweetfb_lock", &lock, sizeof(lock)) && lock != 0 && fIntf1 != NULL && fVTotal > 100;
+'''
+new = '''	uint32_t lock = 1;                      /* lavender (mk_vlock60.py): on by default, sweetfb_lock=0 off */
+	(void)PE_parse_boot_argn("sweetfb_lock", &lock, sizeof(lock));
+	fVLock = lock != 0 && fIntf1 != NULL && fVTotal > 100;
+'''
+assert s.count(old) == 1
 open(p, 'w', newline='\n').write(s.replace(old, new))
 print('ok')

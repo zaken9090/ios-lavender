@@ -1,10 +1,22 @@
 lavender: vsync ticks from the panel by default (sweetfb_lock=0 off); on a 60 Hz panel the least wait to the next tick is a quarter frame, not 12 ms (generator: xnu/src/mk_vlock60.py)
 
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
-index d1a6f2c..da983e4 100644
+index d1a6f2c..559f14f 100644
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -792,7 +792,14 @@ AppleCLCD::vsyncNext(void)
+@@ -600,8 +600,9 @@ AppleCLCD::start(IOService *provider)
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+ 	fFlushTicks = (hz == 0 || hz >= sweet_vhz()) ? 1 : sweet_vhz() / hz;
+ 	IOLog("SWEET FB: vsync for CoreAnimation %u Hz\n", sweet_vhz());
+-	uint32_t lock = 0;
+-	fVLock = PE_parse_boot_argn("sweetfb_lock", &lock, sizeof(lock)) && lock != 0 && fIntf1 != NULL && fVTotal > 100;
++	uint32_t lock = 1;                      /* lavender (mk_vlock60.py): on by default, sweetfb_lock=0 off */
++	(void)PE_parse_boot_argn("sweetfb_lock", &lock, sizeof(lock));
++	fVLock = lock != 0 && fIntf1 != NULL && fVTotal > 100;
+ 	fPanelUS = 8333;
+ 	IOLog("SWEET FB: vsync %s the panel (%u lines a frame)\n", fVLock ? "follows" : "does not follow", fVTotal);
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+@@ -792,7 +793,14 @@ AppleCLCD::vsyncNext(void)
  		}
  	}
  	uint32_t next = left + lock_us;
