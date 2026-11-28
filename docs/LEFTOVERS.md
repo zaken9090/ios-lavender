@@ -261,6 +261,7 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | patch_swaphook.py | GPU | copy a display frame out once, at CA's swap: libtopaz-inject interposes IOMobileFramebufferSwapBegin (userland 46084039497, bench aa1a) | the hook never ran (0 put off, no log line): dyld interposing does not reach calls between shared-cache libraries; Settings 43 fps against 50.5 | removed; replaced by patch_flushwho.py (glwho / glskip by call site) |
 | patch_bbdfull.py | display | CA_DISABLE_DIRTY_REGIONS=1 for backboardd (stale keyboard band at the bottom of the App Library, user video 18-58-15) | draws a frame unchanged (26.1 -> 27.0): the variable does not change how CA renders here | removed |
 | patch_scandamage.py | GPU | copy into a scanout surface only the boxes CA drew since its last frame (userland 46108278919, run ag1) | 100 % copied in every second: CA draws 143 of 159 frames with the scissor off over the whole surface (run ag2) | removed; the scissor-off copy kept in patch_canvas.py |
+| xnu 1171 lv_smmu_impl=2/3 | GPU | write the GPU SMMU attach-impl-defs that differ from Linux (0x678c, 0x6794, 0x6960, 0x6b68), one by one with asm access (run ai2) | writes took (0x6b68 partly), no hang; memory wait 227 cyc as before, home 22.6 fps | removed; reads showed the other 8 already at Linux's values |
 
 ## New open items (2026-11-27 night: cores and clocks, docs/HARDWARE.md "CPU clocks, voltages, sensors")
 
