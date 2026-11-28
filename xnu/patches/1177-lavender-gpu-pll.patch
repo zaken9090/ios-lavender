@@ -1,4 +1,4 @@
-lavender: the GPU's own PLL for clocks above 300 MHz, up to the chip's 647 MHz; the governor moves the RCG between two running sources (lv_gpu_mhz, lv_gpu_hi; generator: xnu/src/mk_gpupll.py)
+lavender: the GPU's own PLL for clocks above 300 MHz, up to the chip's 647 MHz; CX voted on rwcx 0 in both sets (lv_gpu_mhz, lv_gpu_hi, lv_cx_sets; generator: xnu/src/mk_gpupll.py)
 
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
 index 7f18813..2fde110 100644
@@ -22,7 +22,7 @@ index 7f18813..2fde110 100644
  			if (gpu_had && ns != 0 && busy >= gpu_before) {
  				share = (busy - gpu_before) * 100000 / ((uint64_t)mhz * ns);    /* cycles / (MHz x ns / 1000) in percent */
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index cbd18c2..18b0d55 100644
+index cbd18c2..af13e78 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
 @@ -398,6 +398,66 @@ lv_branch(volatile uint32_t *b, uint32_t off, const char *name)
@@ -107,16 +107,29 @@ index cbd18c2..18b0d55 100644
  	}
  	PE_parse_boot_argn("lv_gfx_lvl", &lvl, sizeof(lvl));
  	if (lvl) {
-@@ -481,15 +545,28 @@ lavender_gpu_probe(uint32_t level)
+@@ -481,15 +545,41 @@ lavender_gpu_probe(uint32_t level)
  		bool lv = topaz_rpm_write(0, 0x62706d73u, 3, 0x6c766c76u /* vlvl */, lvl);
  		LOG("LVGPU GX rail smpb3 swen %s vlvl %#x %s", en ? "acked" : "FAILED", lvl, lv ? "acked" : "FAILED");
  		IODelay(2000);
 -		if (mhz >= 600 && en && lv && lvl >= 0x180) {
 +		if (lvl >= 0x180) {
 +			/* mk_gpupll.py: stock's resource for CX as well (upwards only: nothing else of ours votes it) */
-+			bool cen = topaz_rpm_write(0, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
-+			bool clv = topaz_rpm_write(0, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
-+			LOG("LVGPU CX rwcx 0 swen %s vlvl %#x %s", cen ? "acked" : "FAILED", lvl, clv ? "acked" : "FAILED");
++			/*
++			 * In both sets, as the bus and DDR votes (mk_rpmscale.py): active-set votes alone left CX at
++			 * 848 mV (runs bs1, bv1); lv_cx_sets=1: the active set only.
++			 */
++			uint32_t sets = 3;
++			PE_parse_boot_argn("lv_cx_sets", &sets, sizeof(sets));
++			bool cen = true, clv = true;
++			if (sets & 2) {
++				cen &= topaz_rpm_write(1, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
++				clv &= topaz_rpm_write(1, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
++			}
++			if (sets & 1) {
++				cen &= topaz_rpm_write(0, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
++				clv &= topaz_rpm_write(0, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
++			}
++			LOG("LVGPU CX rwcx 0 (sets %u) swen %s vlvl %#x %s", sets, cen ? "acked" : "FAILED", lvl, clv ? "acked" : "FAILED");
  			IODelay(3000);                                  /* the rail settles before the clock goes up */
 -			lv_w(lv_gpucc, 0x1074, (5u << 8) | 1u);         /* GPLL0 / 1 = 600 MHz */
 -			lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
@@ -142,7 +155,7 @@ index cbd18c2..18b0d55 100644
  	}
  
  	/* GFX LDO block (DT msm_gfx_ldo 0x506e000, BHS mode: all corners have allow-ldo-mode 0): read only */
-@@ -1205,13 +1282,16 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -1205,13 +1295,16 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
  extern "C" volatile uint32_t lv_gpu_hot;        /* LavenderMetrics thermal guard: hold 300 */
  volatile uint32_t lv_gpu_hot;
  
@@ -163,7 +176,7 @@ index cbd18c2..18b0d55 100644
  	}
  }
  
-@@ -1228,7 +1308,8 @@ lv_gpu_dvfs_loop(void)
+@@ -1228,7 +1321,8 @@ lv_gpu_dvfs_loop(void)
  	bool high = false;
  	uint64_t was = 0, t0 = 0, said = 0, at_high = 0, span = 0;
  	uint32_t ups = 0, downs = 0;
@@ -173,7 +186,7 @@ index cbd18c2..18b0d55 100644
  	for (;;) {
  		IOSleep(period);
  		uint32_t hi = g_r(0x3b1), lo = g_r(0x3b0);
-@@ -1240,7 +1321,7 @@ lv_gpu_dvfs_loop(void)
+@@ -1240,7 +1334,7 @@ lv_gpu_dvfs_loop(void)
  		absolutetime_to_nanoseconds(mach_absolute_time(), &now);
  		ns = now - t0;
  		if (t0 != 0 && busy >= was && ns != 0) {
@@ -182,7 +195,7 @@ index cbd18c2..18b0d55 100644
  			bool want = high;
  			if (lv_gpu_hot) {
  				want = false;
-@@ -1262,8 +1343,8 @@ lv_gpu_dvfs_loop(void)
+@@ -1262,8 +1356,8 @@ lv_gpu_dvfs_loop(void)
  		t0 = now;
  		if (now - said >= 1000000000ull) {
  			if (span != 0) {

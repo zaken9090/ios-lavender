@@ -119,9 +119,22 @@ patch(r, '''		if (mhz >= 600 && en && lv && lvl >= 0x180) {
 		}
 ''', '''		if (lvl >= 0x180) {
 			/* mk_gpupll.py: stock's resource for CX as well (upwards only: nothing else of ours votes it) */
-			bool cen = topaz_rpm_write(0, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
-			bool clv = topaz_rpm_write(0, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
-			LOG("LVGPU CX rwcx 0 swen %s vlvl %#x %s", cen ? "acked" : "FAILED", lvl, clv ? "acked" : "FAILED");
+			/*
+			 * In both sets, as the bus and DDR votes (mk_rpmscale.py): active-set votes alone left CX at
+			 * 848 mV (runs bs1, bv1); lv_cx_sets=1: the active set only.
+			 */
+			uint32_t sets = 3;
+			PE_parse_boot_argn("lv_cx_sets", &sets, sizeof(sets));
+			bool cen = true, clv = true;
+			if (sets & 2) {
+				cen &= topaz_rpm_write(1, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
+				clv &= topaz_rpm_write(1, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
+			}
+			if (sets & 1) {
+				cen &= topaz_rpm_write(0, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
+				clv &= topaz_rpm_write(0, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
+			}
+			LOG("LVGPU CX rwcx 0 (sets %u) swen %s vlvl %#x %s", sets, cen ? "acked" : "FAILED", lvl, clv ? "acked" : "FAILED");
 			IODelay(3000);                                  /* the rail settles before the clock goes up */
 		}
 		if (mhz > 647) {
