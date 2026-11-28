@@ -518,3 +518,12 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     after boot has all four cores at 100 % and the extension does not answer in time; it also asks for
     AppleM2ScalerCSCDriver (not there). Until it is started again the background is black.
   Not changed yet: removing AegirPoster would be switching a function off (it cannot work without Metal).
+- 2026-11-28 16:40, **PLAN S3 step 1: the Gold clock follows the load** (xnu 1174, mk_cpudvfs.py, kernel
+  run-46146359049; lv_cpu_dvfs=0 off). Steps 1113.6 / 1401.6 / 1747.2 / 1958.4 / 2150.4 / 2208 MHz; a
+  touch report asks for the top step at once (held 1.5 s), otherwise the busiest core's share over 100 ms
+  (>= 70 %: top; lower: the step that fits, after 3 periods); the thermal guard moves a cap. No voltage
+  change (868 mV as XBL leaves it). Runs ba1-ba3 (Settings: fps / late / clean seconds; temperature):
+  ba1 59.3 / 7.4 % / 0 %, 59 C (busy boot); ba2 58.6 / 4.2 % / 6 %, 58 C; ba3 (--fast) 55.9 / 11.2 %.
+  Fixed 2208 MHz gave the same late frames at 61-68 C (as2, ax1-ax3); fixed 1747 MHz 6.3-8.3 %. Time at
+  each clock: 80-99 % at 2208 while benched, 14-18 % at 1113 between the phases; idle (75 s): 100 % at
+  1113 MHz, cores 1-3 %, 46-47 C, the battery charging at 118-121 mA. 0.1-0.3 steps a second, none failed.
