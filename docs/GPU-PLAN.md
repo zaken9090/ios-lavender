@@ -603,3 +603,22 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   the periodic eagl lines only with gllog=1. Four boots after it (bo1, bp1, bq1, br1; first bench of
   each boot, busy): Settings 56.9 / 58.9 / 58.6 / 58.9 fps, late 10.0 / 7.1 / 6.4 / 9.4 % - no bad boot
   in four (they were 4 of ~18 before; not yet proof).
+- 2026-11-28 22:10, **PLAN S4: the GPU's voltage and clock, what stock does** (stock DT, gpucc-sdm660.c,
+  clk-alpha-pll.c, rpm-smd-regulator.c from the Xiaomi lavender-p-oss tree; reads on the phone, run bs1):
+  - The GPU has no rail of its own: gfx_corner's vdd-supply is a stub; the core sits on **CX** (PM660L S3,
+    RPM resource "rwcx" 0) through the GX head switch (all corners allow-ldo-mode 0). Stock votes a CX
+    level per clock: 160 / 266 MHz 0x40, 370 0x80, 465 0xc0, 588 0x100, 647 0x140, 750 0x180 (sent as
+    swen 1 + vlvl in one request).
+  - **This chip's speed bin: fuse 0x7841a0 = 0x10f80000 -> 0x87: the table ends at 647 MHz** (647, 588, 465,
+    370, 266, 160); 700 / 750 MHz belong to bins 0x92 / 0x9d / 0.
+  - CX reads 848 mV (PM660L S3 0x350) with our old vote (smpb 3, level 0x80), 852 after rwcx 0 vlvl 0x140,
+    0x180, also with swen 1 first: it does not move, so it is held at its top by others (the DDR at its top
+    clock, the modem); MX 908 mV. The voltage 647 MHz needs is there. (An earlier vote down to level 64
+    did take the rail away from the GPU: the RPM does listen.)
+  - Clocks: stock takes every GPU clock from GPU PLL0 / PLL1 (gpucc + 0x00 / + 0x40, alpha PLLs, VCO = 2 x
+    clock, RCG source 1 / 3, divider 2) and ping-pongs between them; GPLL0 (source 5) is only a parent.
+    XBL leaves both off but set: PLL0 L 61 alpha 0.25 = 1176 MHz (588), PLL1 640 MHz with post divider
+    (160). We ran 600 MHz as GPLL0 / 1 and changed the divider on the running source.
+  - GFX mem-acc (0x01fcf004 bit 0) = 0: the value for 465 MHz and up - right for a CX that stays high.
+  - xnu 1177 (mk_gpupll.py): GPU PLL0 for a fixed lv_gpu_mhz (588, 647) and as the governor's top
+    (lv_gpu_hi=647), the RCG moved between GPLL0 / 2 and PLL0 / 2; CX voted on rwcx 0 as well.
