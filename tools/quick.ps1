@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory)][string]$Tag,
     [string]$Kernel, [string]$Userland, [string]$Extra = "",
     [switch]$Install, [switch]$NoBench,
+    [switch]$Park,      # back to fastboot when done: the phone charges there and drains under iOS (user, 2026-11-28)
     [string]$Adt = "shim\out\lavender.adt",
     [string]$Ready = "redwood-gl: frame 40:"
 )
@@ -42,3 +43,4 @@ if (-not $NoBench) {
     $b = python tools\bench.py $Tag --log "..\dump\bench-$Tag.txt" --settle 2 2>&1 | Select-String "^BENCH" | Select-Object -Last 1
     "$Extra -> $b"
 }
+if ($Park) { To-Fastboot; "parked in fastboot: " + ((& ..\platform-toolsastboot.exe getvar battery-voltage 2>&1 | Select-String "battery-voltage") -as [string]) }

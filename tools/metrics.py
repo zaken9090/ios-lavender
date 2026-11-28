@@ -110,6 +110,9 @@ def short(rows):
             out.append(fmt % s[0])
     # the GPU's work per frame (xnu 1164), compared from run to run (user, 2026-11-27): million pixels
     # passed a frame, cycles a memory request waits, texture cache misses
+    s = stats(rows, "mv")
+    if s:
+        out.append("bat min %d mV" % s[1])
     s = stats(rows, "g_kpix_f")
     if s:
         out.append("%.1f Mpx/frame" % (s[0] / 1000))
