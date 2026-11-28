@@ -19,6 +19,8 @@ memory it moves. No picture quality may be traded.
 4. (done 2026-11-28, xnu 1167 + userland patch_scanout.py) 87 % of display frames were copied into the
    surface the panel still showed; the end-of-frame copy now goes to one of four scanout surfaces
    (0 % in view, fps unchanged). Next here: the 7-20 screens of pixels a frame and the 0.85 us memory wait.
+5. (done 2026-11-28, patch_flushwho.py) the display copy is put off at CA's mid-frame glFlush
+   (glskip, default c0x1884b62e0): home 14.6 -> 20.6 fps, 51 -> 32.5 Mpx a frame.
 
 ## P2 - safety: temperature (done: xnu 1165)
 
@@ -38,6 +40,6 @@ PM660 S2 + S3 to 872 mV, array power mux to APC (0x179d0010 = 2, status 0x179d00
 
 ## P5 - functions
 
-Battery level from the PM660 fuel gauge (iOS shows a static 100 %), AegirPoster crash loop (lock-screen
+Battery level (done: xnu 1168, PM660 fuel gauge; temperature fix in 1168 after bench ab1), AegirPoster crash loop (lock-screen
 flicker), webbookmarksd crash loop, Bluetooth A2DP (Skywalk nexus), stale keyboard band / purple
 switcher cards.

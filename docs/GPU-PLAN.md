@@ -338,3 +338,25 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
 - The night's "USB stopped answering" was an empty battery (3551 mV under load, the phone drains
   ~500 mA under iOS on a PC port). The phone is parked in fastboot between tests now (quick.ps1 -Park,
   tools/charge.ps1; bench line shows the lowest mV).
+- 2026-11-28 03:00, **copy put off at CA's mid-frame flushes** (userland 46088292756, patch_flushwho.py;
+  kernel run-46089146012 to 1169). The swap hook (patch_swaphook.py) is removed: dyld interposing does
+  not reach calls between shared-cache libraries. glwho=1 (bench ab1) names two glFlush callers in
+  backboardd: c0x1882d278c (from c0x1884f6048) once per shown frame (count = SWEET FPS) and
+  c0x1884b62e0 (from c0x1884b186c) ~10 a frame on the home screen. glskip=c0x1884b62e0 (bench ab2),
+  now the default (glskip=0: off):
+
+  | | before (ab1) | glskip (ab2) |
+  |---|---|---|
+  | home (App Library) | 14.6 fps, 51.2 Mpx/frame | **20.6 fps, 32.5 Mpx** |
+  | Settings | 56.5 fps, 20.6 Mpx | 58.2 fps, 19.7 Mpx |
+  | memory wait / texture misses (home) | 264 cyc / 23 % | 233 cyc / 22 % |
+  | GPU busy (home) | 97 % | 92 % |
+
+  Static screenshots of Settings and the home screen correct; 1 GPU hang in the ab2 bench (recovered).
+  The user's eye check of motion is still owed.
+- GPU hang storm after Messages (usblog-y1-after), decoded: 13 of 15 hangs are CP_OPCODE_ERROR
+  (CP_INTERRUPT_STATUS 1, RBBM_STATUS 0x800001c1: no block busy), the CP stops in the fixed IB1
+  prologue (rem 231 = 112 dwords fetched, the ROQ full behind a halted ME); one is a real VPC/UCHE
+  pipeline hang (0xc30001c3). IB1 memory at the time of the dump holds a different stream (an IB2's
+  draws) - command memory rewritten while queued is the first suspect. Init registers match msm's
+  a512 branch. xnu 1169 logs the opcode (CP_PFP_STAT) at the next such hang.

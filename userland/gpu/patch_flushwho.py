@@ -10,6 +10,11 @@ drawn then.
 glskip=c0xADDR[,c0xADDR...] (up to 8, the first return address of the glwho lines): at a call from
 there a display frame (a mirrored target of the display's size) is not copied out; it stays drawn
 and goes out at the next call from anywhere else. A line a second counts the copies put off.
+Default (no glskip=): c0x1884b62e0 - glwho=1 on 2026-11-28 (bench ab1) showed two glFlush callers in
+backboardd: c0x1882d278c (from c0x1884f6048), once per frame shown (its count = SWEET FPS), and
+c0x1884b62e0 (from c0x1884b186c), ~10 a frame on the home screen, mid-frame. Putting the copies off
+at the second (bench ab2): home 14.6 -> 20.6 fps, 51.2 -> 32.5 Mpx a frame, Settings 56.5 -> 58.2,
+picture unchanged. glskip=0: every call copies, as before.
 
 (patch_swaphook.py tried the same by interposing IOMobileFramebufferSwapBegin: dyld's interposing does
 not reach calls between the shared cache's own libraries - the hook never ran.)
@@ -39,6 +44,10 @@ sub('''		scan_on = strstr(arguments, "glscan=0") == NULL;''', '''		scan_on = str
 		{
 			const char *k = strstr(arguments, "glskip=");
 
+			if (k == NULL) {
+				/* default: CA::OGL's mid-frame flush of this iOS 16.7.16 cache (bench ab1/ab2) */
+				who_skip[who_skips++] = 0x1884b62e0UL;
+			}
 			for (k = k != NULL ? k + 7 : NULL; k != NULL && who_skips < 8;) {
 				char *end;
 				unsigned long v;

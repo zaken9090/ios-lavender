@@ -5,7 +5,7 @@ lavender neither answers and iOS was shown a static 100 %, on external power, no
 has a fuel gauge of its own (Linux qcom fg-gen3) and the charger (smb2), both on SPMI slave 0:
 
   0x4009        BATT_SOC_FG_MONOTONIC_SOC: the gauge's state of charge, 0..255
-  0x4150/51     BATT_INFO_BATT_TEMP: 0.25 K a step, 10 bits
+  0x4150/51     BATT_INFO_BATT_TEMP: 0.25 K a step, 11 bits
   0x41A0/A1     BATT_INFO_VBATT: 122.07 uV a step
   0x41A2/A3     BATT_INFO_IBATT: 488.281 uA a step, positive = discharging (Linux)
   0x1006        BATTERY_CHARGER_STATUS_1: bits 2..0 = 0 trickle, 1 pre, 2 fast, 3 full-on, 4 taper,
@@ -79,7 +79,7 @@ SweetBattery::pollLavender(void)
 		}
 	}
 	unsigned msoc = v[0];
-	int kelvin4 = ((v[2] & 3) << 8) | v[1];
+	int kelvin4 = ((v[2] & 7) << 8) | v[1];
 	int mv = (int)(int16_t)(v[3] | (v[4] << 8)) * 12207 / 100000;
 	int ma = (int)((int64_t)(int16_t)(v[5] | (v[6] << 8)) * 488281 / 1000000);
 	unsigned state = v[7] & 7u;
