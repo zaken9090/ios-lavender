@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--log")
     ap.add_argument("--steps", default="")
     ap.add_argument("--lock", action="store_true", help="save the lock screen first")
+    ap.add_argument("--noshots", action="store_true", help="no picture after each step (profiling: lv:shot freezes frames)")
     ap.add_argument("--burst", type=int, default=0,
                     help="N pictures as fast as the link allows, starting right with the unlock swipe "
                          "(ui_TAG_b00_<ms>.png, ms since the swipe), to catch flicker")
@@ -102,6 +103,9 @@ def main():
         for step in [s.strip() for s in a.steps.split(";") if s.strip()]:
             if step.startswith("wait"):
                 time.sleep(float(step.split()[1]))
+                continue
+            if a.noshots:
+                bench.cmd(phone, "lv:" + step, 0.0)
                 continue
             bench.cmd(phone, "lv:" + step, 2.0)
             shot = bench.screenshot(phone, rd, None)
