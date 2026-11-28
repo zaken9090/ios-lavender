@@ -418,3 +418,14 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   not help a latency limit (and costs a restore/resolve per CA flush). Suspect: the GPU SMMU in front
   of all GPU traffic, whose attach-impl-defs (DT arm,smmu-kgsl) Linux writes and we never did - xnu
   1171 reads them (lv_smmu_impl=2) and writes the differing ones one by one (3).
+  Result (run ai2): 8 of 12 already at Linux's values, the 4 others written without a hang - memory
+  wait 227 cyc, home 22.6 fps: not the SMMU (removed, LEFTOVERS). GMEM again (ai3: home 15.3,
+  Settings 32.9; with CA's mid-frame glFlush skipped, aj2: 16.3 / 33.4): slower - batches split at
+  every blur read. The render backend waits on a full input FIFO ~70 % of its time (LVG rbfifo):
+  blending reads the destination from memory and waits the same ~800 ns.
+- 2026-11-28 10:30, **GPU DVFS 300 <-> 600 MHz, default** (xnu 1171, mk_gpudvfs.py; lv_gpu_dvfs=0 off,
+  lv_gpu_dvfs_ms/up/down). The rail is voted to the 600 level at boot, a thread moves the gfx3d divider
+  every 50 ms by the busy share; the thermal guard holds 300 when hot. Bench ak3 (kernel
+  run-46125445657, userland 46121702037, no extra boot-arg): home **24.4 fps** (21.4), Settings 59.9,
+  0 GPU hangs; current under load +65 mA home, +130 mA Settings (it goes up on 50 ms bursts). Open:
+  lower the rail with the clock (votes from the AP once broke the GPU), thresholds for Settings.

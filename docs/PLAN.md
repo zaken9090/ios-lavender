@@ -22,7 +22,11 @@ memory it moves. No picture quality may be traded.
 5. (done 2026-11-28, patch_flushwho.py) the display copy is put off at CA's mid-frame glFlush
    (glskip, default c0x1884b62e0): home 14.6 -> 20.6 fps, 51 -> 32.5 Mpx a frame.
 6. (done 2026-11-28, patch_canvas.py) both display surfaces drawn in one texture: no preserve copy;
-   Settings 20.5 -> 17.1 Mpx, home 21.2 fps. Next: GMEM / tiled rendering without flicker.
+   Settings 20.5 -> 17.1 Mpx, home 21.2 fps. GMEM measured again: slower (rejected).
+7. (done 2026-11-28, xnu 1170-1171) the home screen waits on a fixed ~800 ns GPU memory latency (not
+   DDR bandwidth: same fps at DDR 1017 and 1804 MHz); GPU DVFS 300 <-> 600 MHz by default: home
+   21.4 -> 24.4 fps. Next: the rail with the clock (power), why the latency is ~800 ns (VBIF / bus
+   settings against Linux), native resolution (1125x2436 is drawn, panel is 1080x2340).
 
 ## P2 - safety: temperature (done: xnu 1165)
 
