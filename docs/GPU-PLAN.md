@@ -577,3 +577,20 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     0x179d1370, values 0 0 0x80000000 (level 1) / 0 0 0 (2) / 0 0 1 (3). Here they read 0 0 0: level 2,
     right for 1401..2150 MHz. xnu 1176 now sets 0x179d1370 = 1 with the 2208 MHz step (at 937 mV, then
     948), and 0 again on the way down (lv_cpu_acc=0: off, then nothing above 937 mV).
+- 2026-11-28 20:30, **the stock voltage for the top Gold clock works** (kernel run-46154931008 = 1176 with
+  the mem-acc level; lv_cpu_volt=1 lv_cpu_volt_hi=1): three boots (bk1-bk3 with 90 s idle, bl1-bl2,
+  bm1-bm2), ~230 s at "948 mV apc acc 3", ~120 s at "768 mV mx acc 2", steps both ways through 872 mV (mux)
+  and 937 mV (mem-acc): no backboardd / SpringBoard crash, rec 0/0, no rail error. Settings 58.3-59.7 fps,
+  late 3.3 % (bk2, quiet) / 7.5 % (bk1, busy boot). Heat under load 62-72 C (868 mV: 57-60 C, fixed
+  2208 MHz 61-68 C); the thermal guard's limit is 85 C. What broke bf1 was level 2 at 948 mV; 1958 MHz /
+  885 mV on APC with level 2 (as stock) was clean (bj1 / bj2).
+  Both rail modes are the default now (xnu 1175 / 1176 regenerated): lv_cpu_volt=0 or lv_cpu_volt_hi=0 off.
+- 2026-11-28 20:35, the Photos widget stays a grey placeholder (user, screenshot ui_bk4_home.png).
+  PhotosReliveWidget is started twice in the first minute after boot and killed both times with
+  "extension check-in timeout" (as ScreenTimeWidget, LockScreenPeople, sometimes CollectionsPoster = the
+  blue wallpaper): the first copy was still in its own start (-[_EXRunningExtension _startWithArguments:]
+  -> swift_getSingletonMetadata), the second waited for LaunchServices (_LSCopyServerStore -> a
+  synchronous XPC reply from lsd). In that minute all four cores are busy 41 of 85 seconds and these are
+  low-priority processes: they do not get to check in in time. Nothing starts the widget again in the
+  next five minutes. On an iPhone this is what the efficiency cores are for (PLAN S2), besides a lighter
+  boot (the AegirPoster crash loop, ReportCrash).

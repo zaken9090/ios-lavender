@@ -17,11 +17,12 @@ S5. Smoothness of the whole system (late frames, not averages: SWEET FPS "late" 
 
 S3 in steps (user 2026-11-28: S3 before S2; "also sort out the voltage that is missing for the top clock"):
  1. (done, xnu 1174) the Gold clock follows the load, 1113..2208 MHz, touch boost; rail untouched (868 mV).
- 2. (xnu 1175, lv_cpu_volt=1, being tested) the rail goes down with the clock: 768 mV to 1401 MHz, 828 at 1747.
- 3. the stock voltage for the top clocks: 1958 MHz ~885 mV, 2150 MHz 937, 2208 MHz 948 (now 868: 80 mV
-    under). Above 872 mV the array power mux goes MX -> APC first (0x179d0010 = 2, wait 0x179d0018 & 0x1f
-    == 3; back: 0, wait == 0), as clk-cpu-osm.c programs the OSM to do; the OSM table has no APCS mem-acc
-    registers on this chip.
+ 2. (done, xnu 1175, default) the rail goes down with the clock: 768 mV to 1401 MHz, 828 at 1747. Written
+    as one two-byte SPMI write to PM660 S3 (the master phase). No measurable gain at idle.
+ 3. (done, xnu 1176, default) the stock voltage for the top clocks: 1958 MHz 885 mV, 2150 MHz 937,
+    2208 MHz 948 (was 868: 80 mV under). Through 872 mV the array power mux goes MX <-> APC (0x179d0010 =
+    2 / 0, wait 0x179d0018 & 0x1f == 3 / 0); the top step also needs mem-acc level 3 (0x179d1370 = 1,
+    msm8998's registers; without it 948 mV corrupted the cores' work). Three boots clean.
  4. Silver, when the cores exist (S2).
 For S4, found on the way (stock DT, cpr4-ctrl@05061000 "gfx"): GPU corners 160 / 266 / 370 / 465 / 588 /
 647 / 750 MHz with CX levels 0x40 0x40 0x80 0xc0 0x100 0x140 0x180, ceilings 585..1070 mV, and a
@@ -33,7 +34,9 @@ the late frames in Settings stay (4-8 %), so E cores would help the minute after
 on check-in timeouts, the wallpaper late) rather than steady scrolling; Gold 2208 MHz halves the late
 frames (S3). Done for S5: xnu 1172 (no contiguous hunt per IOSurface), 1173 (vsync tick from the panel).
 Open for S5: the 4-5 % floor (who is late: application or backboardd), the AegirPoster crash loop
-(needs Metal), the panel-native resolution.
+(needs Metal), the panel-native resolution, widget / wallpaper extensions killed on check-in timeouts
+in the busy first minute after boot (Photos widget stays a placeholder: GPU-PLAN 2026-11-28 20:35), the
+GPU stop during boot that nothing notices (bg1: "gpu 100 %, sub 0", no recovery).
 
 # Priority plan (2026-11-27, after the metrics of xnu 1160-1163)
 
