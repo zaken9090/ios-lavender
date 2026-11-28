@@ -461,3 +461,12 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   ~80 % of the pixels are drawn with blending off, so the destination read is not the main cost. a5_hw_init
   matches Linux's A509/A512 branches (UCHE ways, CP thresholds, ECO bits, hbb). Next with the phone:
   glsumstat=1 (userland 46138626617) and a fresh per-draw trace of an App Library frame.
+- 2026-11-28 13:40, **GPU DVFS off by default again** (xnu 1171 regenerated, lv_gpu_dvfs=1 turns it on).
+  Runs al1 and aq1 (2 of 13 boots since it was the default) hung within a second of a 300 -> 600 step
+  under boot load ("no answer", RBBM_STATUS e70091c1 / c50801c3, STATUS3 00700003 / 00540000); al1's
+  reset worked once, aq1's failed ("recovery FAILED: RBBM_STATUS c00003c1 rptr 0 wptr 9"): black
+  screen, every submit -60. The rail vote (smpb3 0x180) is acked but PM660L S3 reads 852-856 mV at
+  either clock (runs n1-n3): 600 MHz runs at the 300 MHz voltage. Voltage first (PLAN S4).
+  User's manual test of run-46125445657 + userland 46134608630: no tearing / flicker / shake, but dips
+  everywhere, Settings too. glsumstat (aq1, before the hang): own small 45 looks 3969 KB 1899 us a
+  second on the lock screen; nothing wrapped - to repeat in Settings and the App Library.

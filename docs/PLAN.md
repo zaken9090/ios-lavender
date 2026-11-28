@@ -1,3 +1,20 @@
+# Plan of 2026-11-28 (user; replaces the order below until done)
+
+After the manual test of kernel run-46125445657 + userland 46134608630: no tearing, flicker or shake,
+but nothing is smooth - fps dips are visible even in Settings (bench: 60 fps on average with 1-8 late
+frames nearly every second; all four Gold cores at 100 %).
+
+S1. Audit: what iOS does with its efficiency cores (which threads, by which rule; XNU's AMP scheduler,
+    what CLPC adds) - docs/CORES.md.
+S2. Our Silver cores the way iOS uses E cores: part of the load moves off the Gold cores. Known: Silver
+    has no 16K granule (HARDWARE.md), so this means a 4K-granule kernel (the first project had one:
+    its patches 0993, 0994, 1003; 8 cores without AMP were 9 % slower there).
+S3. Core voltage and dynamic clocks for Gold + Silver (nothing has to sit at the top clock).
+S4. Back to GPU + DDR: voltage first (the rail does not follow our vote: PM660L S3 852-856 mV at 300 and
+    600 MHz), then the highest GPU clock that is stable, then dynamic scaling. Until then GPU DVFS is off
+    by default again (xnu 1171: 2 of 13 boots hung right after a 300 -> 600 step, one not recovered).
+S5. Smoothness of the whole system (late frames, not averages: SWEET FPS "late" / gaps).
+
 # Priority plan (2026-11-27, after the metrics of xnu 1160-1163)
 
 The order work is done in until the user changes it. Each item ends with a bench (tools/bench.py, LVM

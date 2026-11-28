@@ -6,8 +6,11 @@ stock OPPs; here only GPLL0 / 1 and / 2 are used (no GPU PLL): the GX rail is vo
 600 MHz level (0x180, gfx corner 7 - the rail is never lowered from the AP: lv:rpm votes down broke the
 GPU) and only the gfx3d RCG divider moves.
 
-  lv_gpu_dvfs=1        on - the default since run ak2 (home 21.4 -> 24.4 fps, Settings 60, 0 hangs);
-                       lv_gpu_dvfs=0: as before, fixed lv_gpu_mhz (300)
+  lv_gpu_dvfs=1        on (home 21.4 -> 24.4 fps, Settings 60). OFF by default again since 2026-11-28:
+                       2 of 13 boots (al1, aq1) hung within a second of a 300 -> 600 step under load and the
+                       soft reset did not bring the CP back (aq1); the rail vote does not move PM660L S3
+                       (852-856 mV at either clock), so 600 MHz runs at the 300 MHz voltage. On again once
+                       the rail follows the clock. Default: fixed lv_gpu_mhz (300)
   lv_gpu_dvfs_ms=50    sampling period
   lv_gpu_dvfs_up=85    busy % at 300 MHz above which it goes to 600
   lv_gpu_dvfs_down=40  busy % at 600 MHz below which it goes back to 300 (= 80 % of 300)
@@ -35,7 +38,7 @@ patch(r, '''	uint32_t lvl = 0x80, mhz = 300;
 	if (mhz >= 600) {
 		lvl = 0x180;
 	}
-''', '''	uint32_t lvl = 0x80, mhz = 300, dvfs = 1;
+''', '''	uint32_t lvl = 0x80, mhz = 300, dvfs = 0;
 	/* lavender: lv_gpu_mhz=600 - GPLL0 / 1 on rail level 0x180 (gfx corner 7, good to 647 MHz); mk_gpu600.py */
 	PE_parse_boot_argn("lv_gpu_mhz", &mhz, sizeof(mhz));
 	PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
@@ -126,11 +129,11 @@ lv_gpu_dvfs_thread(__unused void *arg, __unused wait_result_t w)
 	lv_gpu_dvfs_loop();
 }
 
-/* TopazAdreno.cpp, once the GPU is ready: lv_gpu_dvfs=1 starts the loop in a thread of its own */
+/* TopazAdreno.cpp, once the GPU is ready: lv_gpu_dvfs=1 (default 0) starts the loop in a thread of its own */
 extern "C" void
 lavender_gpu_dvfs_start(void)
 {
-	uint32_t dvfs = 1;
+	uint32_t dvfs = 0;
 	thread_t thread;
 	PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
 	if (dvfs && kernel_thread_start(lv_gpu_dvfs_thread, NULL, &thread) == KERN_SUCCESS) {
