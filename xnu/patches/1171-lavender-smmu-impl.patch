@@ -1,0 +1,51 @@
+lavender: GPU SMMU implementation-defined registers - lv_smmu_impl=2 reads, 3 writes the differing ones one by one (generator: xnu/src/mk_smmuimpl.py)
+
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index ea1186f..702ff06 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -757,14 +757,32 @@ lavender_gpu_smmu(uint32_t level)
+ 		return;
+ 	}
+ 	lavender_gpu_smmu_dump("before");
+-	if (level < 10) {
+-		return;
+-	}
+ 	static const uint32_t impl[][2] = {     /* DT attach-impl-defs */
+ 		{ 0x6000, 0x2378 }, { 0x6060, 0x1055 }, { 0x678c, 0x08 }, { 0x6794, 0x28 }, { 0x6800, 0x06 },
+ 		{ 0x6900, 0x3ff }, { 0x6924, 0x204 }, { 0x6928, 0x11000 }, { 0x6930, 0x800 }, { 0x6960, 0xffffffff },
+ 		{ 0x6b64, 0x1a5551 }, { 0x6b68, 0x9a82a382 },
+ 	};
++	{
++		/* lavender (mk_smmuimpl.py): lv_smmu_impl=2 reads them, 3 also writes those that differ */
++		uint32_t mode = 0, mask = 0xffeu;
++		PE_parse_boot_argn("lv_smmu_impl", &mode, sizeof(mode));
++		PE_parse_boot_argn("lv_smmu_impl_mask", &mask, sizeof(mask));
++		if (mode >= 2) {
++			for (unsigned i = 0; i < sizeof(impl) / sizeof(impl[0]); i++) {
++				LOG("LVSMMU impl read %#x", impl[i][0]);
++				uint32_t was = sr(impl[i][0]);
++				LOG("LVSMMU impl %#x = %#x (Linux %#x)", impl[i][0], was, impl[i][1]);
++				if (mode == 3 && (mask & (1u << i)) && was != impl[i][1]) {
++					LOG("LVSMMU impl write %#x = %#x", impl[i][0], impl[i][1]);
++					sw(impl[i][0], impl[i][1]);
++					LOG("LVSMMU impl %#x now %#x", impl[i][0], sr(impl[i][0]));
++				}
++			}
++		}
++	}
++	if (level < 10) {
++		return;
++	}
+ 	/*
+ 	 * 2026-11-25: writing attach-impl-defs straight away hung the whole phone (the first is 0x6000,
+ 	 * qcom,micro-mmu-control; Linux halts the SMMU through it first). Off unless lv_smmu_impl=1.
+@@ -772,7 +790,7 @@ lavender_gpu_smmu(uint32_t level)
+ 	 */
+ 	uint32_t do_impl = 0;
+ 	PE_parse_boot_argn("lv_smmu_impl", &do_impl, sizeof(do_impl));
+-	for (unsigned i = 0; do_impl && i < sizeof(impl) / sizeof(impl[0]); i++) {
++	for (unsigned i = 0; do_impl == 1 && i < sizeof(impl) / sizeof(impl[0]); i++) {
+ 		LOG("LVSMMU impl %#x = %#x", impl[i][0], impl[i][1]);
+ 		sw(impl[i][0], impl[i][1]);
+ 	}
