@@ -636,3 +636,19 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     BHS_EN_REST_ACK set); our comment in TopazRpm.cpp numbers the bits one too high, the result is right.
   - Next (kernel being built): the CX vote in both RPM sets - the bus and DDR votes that do take effect
     are written to the sleep set as well.
+- 2026-11-29 00:20, S4 continued (kernel run-46162780845 = 1177 with CX voted in both sets):
+  - CX stays 852 mV (PM660L S3 0x354) with rwcx 0 swen 1 + vlvl 0x180 in both sets (bw1), and for any
+    active-set level 0x100 / 0x140 / 0x180 / 0x200 voted afterwards from the host: something else holds it
+    there, above or at our vote. The RPM does act on our regulator requests: "ldob 3 swen 1" switched the
+    fingerprint LDO (PM660L L3) on at once (status 0x94), "uv 3000000" moved it 3008 -> 3000 mV, "swen 0"
+    switched it off.
+  - **Never send "uv" (or "corn") to rwcx / smpb 3**: "lv:rpm rwcx 0 uv 900000" got no answer and after it
+    the RPM answered nothing at all (every later request FAILED by timeout) until the reboot.
+  - Stock DT comment: "PM660L S3 + S4 - VDD_CX supply". Here S4 (0x31d00) is off (status 0, enable 0, set
+    point 848 while S3 is at 852: not tracking). If the rail is meant to have two phases and runs on one,
+    it sags under the GPU's load at the top clock - a candidate for why 647 MHz stops (bu1) while stock
+    rates this chip (bin 0x87) for it. Not tested (the board may have one phase; the RPM owns the rail).
+  - **GPU governor 300 <-> 588 MHz from GPU PLL0: seven boots (bx1 by1 bz1 ca1 cb1 cc1 cd1), ~90 steps up,
+    rec 0/0, no backboardd crash**; home 24.3-25.3 fps (300 MHz fixed: 21-22), Settings 57-60 fps; 71 C
+    and 840-880 mA in the busy first bench. The old stepping (GPLL0 divider on the running source) stopped
+    the GPU in 2 of 13 boots. Default again (xnu 1177 regenerated: lv_gpu_dvfs=0 off, lv_gpu_hi=588).
