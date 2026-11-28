@@ -7,6 +7,7 @@ LVM line nearest before it (CPU load of the four cores, GPU busy share and clock
 Seconds are grouped by frame count: "smooth" (>= 45 frames: Settings-like scrolling) and "slow"
 (8..44: the home screen / App Library). For each group: seconds, frames, share of frames that were
 late (b+c+d), the worst gap, the share of seconds with no late frame, mean CPU and GPU load.
+With the governor's LVF lines (xnu 1174) the share of time at each Gold clock is given.
 With eagl's glsumstat=1 lines ("redwood-gl: sums: ...") the surface sums per second are added up too.
 
 usage: late.py LOG [LOG...]
@@ -17,6 +18,7 @@ import sys
 FPS = re.compile(r"SWEET FPS: (\d+) frames in (\d+) ms, longest gap (\d+) ms, (\d+) late.*?gaps (\d+)/(\d+)/(\d+)/(\d+)")
 LVM = re.compile(r"LVM \d+ ms: cpu (\d+) (\d+) (\d+) (\d+) .*?gpu (\d+)% (\d+) MHz")
 SUMS = re.compile(r"redwood-gl: sums: (.*)")
+LVF = re.compile(r"LVF \d+ ms: 1113 (\d+)% 1401 (\d+)% 1747 (\d+)% 1958 (\d+)% 2150 (\d+)% 2208 (\d+)% \| (\d+) ups (\d+) downs (\d+) touch")
 KIND = re.compile(r"(own small|own big|wrapped small|wrapped big) (\d+) looks (\d+) KB (\d+) us (\d+) changed")
 
 
@@ -58,6 +60,12 @@ def main():
                 t = kinds.setdefault(k, [0, 0, 0, 0])
                 for i, v in enumerate((looks, kb, us, changed)):
                     t[i] += int(v)
+        lvf = [tuple(map(int, m.groups())) for m in LVF.finditer(text)]
+        if lvf:
+            n = len(lvf)
+            share = [sum(r[i] for r in lvf) / n for i in range(6)]
+            print(f"  Gold clock over {n} s: " + ", ".join(f"{mhz} {v:.0f} %" for mhz, v in zip((1113, 1401, 1747, 1958, 2150, 2208), share))
+                  + f"; {sum(r[6] for r in lvf) / n:.1f} ups {sum(r[7] for r in lvf) / n:.1f} downs a second, {sum(r[8] for r in lvf)} touch boosts")
         if seconds:
             print(f"  surface sums over {seconds} s:", "; ".join(
                 f"{k} {v[0] / seconds:.0f} looks {v[1] / seconds / 1024:.1f} MB {v[2] / seconds / 1000:.1f} ms a second, "
