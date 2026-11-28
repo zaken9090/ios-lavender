@@ -360,3 +360,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   pipeline hang (0xc30001c3). IB1 memory at the time of the dump holds a different stream (an IB2's
   draws) - command memory rewritten while queued is the first suspect. Init registers match msm's
   a512 branch. xnu 1169 logs the opcode (CP_PFP_STAT) at the next such hang.
+- 2026-11-28 03:15, bench ab3 (kernel run-46090709916, userland 46090704194: glskip by default, no
+  boot-arg): home 18.9 fps, 30.4 Mpx/frame, memory wait 232 cyc, texture misses 22 %, 0 GPU hangs;
+  ~10 copies put off for every one made. The Settings phase got no frames: iOS's "Cellular Issue
+  Detected" alert came up late and covered it (screenshot), not a stall. Battery now from the gauge:
+  21 %, 37.0 C, charging. Opening Messages from the host failed (lv:tap and a held lv:swipe on its
+  icon in the dock and the App Library left the screen as it was; the alert's OK took the same tap):
+  the hang-storm check still needs the user's finger or a look at why.
