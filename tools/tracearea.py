@@ -36,6 +36,8 @@ def main():
     draws_by_target = collections.Counter()
     by_program = collections.Counter()
     by_texture = collections.Counter()
+    by_blend = collections.Counter()    # (blend on/off, target size) -> pixels
+    blend = False
     pending = None          # (count, mode) of the draw whose info/corners follow
     info = None
     corners = []
@@ -63,6 +65,7 @@ def main():
         by_target[key] += area
         draws_by_target[key] += 1
         by_program[prog] += area
+        by_blend[("blend" if blend else "opaque", key)] += area
         if tex:
             by_texture[tex] += area
         total += area
@@ -100,6 +103,9 @@ def main():
         m = ENABLE.search(ln)
         if m and m.group(2) == "0xc11":
             boxed = m.group(1) == "Enable"
+        if m and m.group(2) == "0xbe2":
+            finish()
+            blend = m.group(1) == "Enable"
     finish()
     screen = 1125 * 2436
     print(f"{frames} traced frames (flushes), {total / 1e6:.1f} Mpx drawn = {total / screen:.1f} screens"
@@ -107,6 +113,7 @@ def main():
     print("by target size (Mpx, draws):")
     for k, v in by_target.most_common(a.top):
         print(f"  {k:>12}: {v / 1e6:7.1f} Mpx  {draws_by_target[k]:5d} draws")
+    print("by blending and target (Mpx):", ", ".join(f"{k[0]} {k[1]}: {v / 1e6:.1f}" for k, v in by_blend.most_common(a.top)))
     print("by program (Mpx):", ", ".join(f"{k}: {v / 1e6:.1f}" for k, v in by_program.most_common(a.top)))
     print("by first texture size (Mpx):", ", ".join(f"{k}: {v / 1e6:.1f}" for k, v in by_texture.most_common(a.top)))
 
