@@ -1,4 +1,8 @@
-"""lavender: sweetfb_lock=1 on a 60 Hz panel - no tick thrown away for being under 12 ms away (patch 1173).
+"""lavender: vsync ticks from the panel by default, usable on a 60 Hz panel (patch 1173).
+
+sweetfb_lock is on by default now (sweetfb_lock=0: the free-running timer as before). Runs aw1 / aw2
+(1747 MHz) and ax1-ax3 (2208 MHz) with it: Settings 57.4-59.3 fps, 4.2-6.7 % late frames - as the good
+boots without it, and no boot in the bad phase (ao1, av1 / av2 without it: 49-54 fps, 13-16 % late).
 
 vsyncNext() (the base's, for a 127 Hz panel: "every second panel frame") never waits less than 12 ms:
 on lavender's 60 Hz panel (16.6 ms a frame, SWEET INTF1) a timer handler that ran 4.4 ms late pushed
@@ -7,7 +11,7 @@ Settings 48-56 fps against 59 without). Now the least wait is a quarter of the p
 panel is slower than ~83 Hz, 12 ms as before otherwise.
 
   sweetfb_lock_min_us=N   the least wait to the next tick (default 0: as above)
-Without sweetfb_lock=1 nothing changes: the free-running timer is re-armed 16.67 ms after its handler
+With sweetfb_lock=0 the free-running timer is re-armed 16.67 ms after its handler
 ends, so CoreAnimation gets ~57-58 ticks a second against the panel's 60 (300 ticks, 308-314 frames).
 
 usage: python mk_vlock60.py XNU_TREE   (after mk_contigbackoff.py)
