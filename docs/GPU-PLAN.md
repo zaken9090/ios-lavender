@@ -499,3 +499,22 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   - The floor of ~4-5 % late frames is left in every configuration (lock, Gold 2208, GPU 300 or DVFS,
     quiet or busy background); they are spread evenly over frame numbers (not eagl's 20-frame line).
     Next: who is late in those frames - the application's commit or backboardd's own preparation.
+- 2026-11-28 15:40, kernel run-46143474635 (1171 DVFS off, 1172, 1173 tick from the panel by default) with
+  userland 46138626617: ay1 Settings 59.9 fps, 8.2 % late (busy boot); ay2 57.0 / 6.3 % / 26 % clean;
+  ay3 (--fast: flicks, iOS scrolls on by itself) 55.4 fps, 13.7 % late - more late frames the faster the
+  list moves, so they are made by the work for new rows (application + backboardd CPU), not by the touch
+  path. Known-good now.
+- 2026-11-28 15:45, wallpaper (user: a red-black gradient on the lock screen after boot, a black home
+  background, the blue wallpaper comes late). Two things in the logs:
+  - **AegirPoster** (the Astronomy wallpaper's extension) dies on every start, ~47 times in 10 minutes:
+    "NSInvalidArgumentException -[__NSArrayM insertObject:atIndex:]: object cannot be nil" in
+    -[NUNIAegirRenderer _renderOffscreenSceneWithScene:viewport:commandBuffer:frameBufferIndex:
+    drawableTexture:] <- CLKUIMetalQuadView snapshot <- -[PRRenderer scene:willConnectToSession:options:]
+    (stderr through sweetnull=...,AegirPoster; stack with ipsw a2s, run az1). It renders with Metal and
+    there is none here. PosterBoard starts it again every ~5-10 s; each death runs ReportCrash (up to
+    56 % of a core for seconds, seen inside the Settings bench ar2).
+  - **CollectionsPoster** (the default blue wallpaper) was killed in the ar boot with "extension check-in
+    timeout" (as ScreenTimeWidget, PhotosReliveWidget, LockScreenPeople in every boot): the first minute
+    after boot has all four cores at 100 % and the extension does not answer in time; it also asks for
+    AppleM2ScalerCSCDriver (not there). Until it is started again the background is black.
+  Not changed yet: removing AegirPoster would be switching a function off (it cannot work without Metal).

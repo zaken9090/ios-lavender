@@ -15,6 +15,13 @@ S4. Back to GPU + DDR: voltage first (the rail does not follow our vote: PM660L 
     by default again (xnu 1171: 2 of 13 boots hung right after a 300 -> 600 step, one not recovered).
 S5. Smoothness of the whole system (late frames, not averages: SWEET FPS "late" / gaps).
 
+State 2026-11-28 15:45 (docs/CORES.md, GPU-PLAN.md): S1 done. Measured for S2: with the background quiet
+the late frames in Settings stay (4-8 %), so E cores would help the minute after boot (extensions killed
+on check-in timeouts, the wallpaper late) rather than steady scrolling; Gold 2208 MHz halves the late
+frames (S3). Done for S5: xnu 1172 (no contiguous hunt per IOSurface), 1173 (vsync tick from the panel).
+Open for S5: the 4-5 % floor (who is late: application or backboardd), the AegirPoster crash loop
+(needs Metal), the panel-native resolution.
+
 # Priority plan (2026-11-27, after the metrics of xnu 1160-1163)
 
 The order work is done in until the user changes it. Each item ends with a bench (tools/bench.py, LVM
