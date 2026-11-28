@@ -40,6 +40,26 @@ patch(m, '''static uint32_t cv_on, cv_boot, cv_now, cv_lo = 768, cv_mid = 828;
 static volatile uint32_t *cv_apm;               /* 0x179d0000: +0x10 mode (2 = APC, 0 = MX), +0x18 status (& 0x1f: 3 / 0) */
 static uint32_t cv_hi, cv_top, cv_1958 = 885, cv_2150 = 937, cv_2208 = 948;
 static bool cv_apc;                             /* the arrays are on the APC rail */
+/*
+ * The cores' memory settings ("mem-acc") have three levels by corner (stock OSM table, last column but one:
+ * 1 at 1113 MHz, 2 from 1401 to 2150, 3 at 2208). The registers and values are msm8998's (the same KBSS
+ * block at the same addresses): 0x179d1368 / 136c / 1370 = 0 0 0x80000000 (1), 0 0 0 (2), 0 0 1 (3). XBL
+ * leaves 0 0 0. Run bf1 (2208 MHz at 948 mV with level 2): backboardd died, the GPU got garbage; run bj1
+ * (1958 MHz at 885 mV on APC, level 2 as stock has it there): clean. So level 3 goes with the top step,
+ * switched at the step below's voltage as stock switches such settings at their threshold.
+ */
+static uint32_t cv_acc = 1, cv_lvl = 2;         /* lv_cpu_acc=0: never touch them */
+
+static void
+cv_level(uint32_t lvl)
+{
+	apcs_common[0x368 / 4] = 0;
+	apcs_common[0x36c / 4] = 0;
+	apcs_common[0x370 / 4] = lvl == 3 ? 1u : 0u;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	IODelay(50);
+	cv_lvl = lvl;
+}
 ''')
 
 # cv_set: up to cv_top
@@ -85,7 +105,15 @@ static bool
 cv_goto(uint32_t mv)
 {
 	bool apc = mv >= CV_APM_MV;
+	uint32_t lvl = cv_hi && cv_acc && mv > cv_2150 ? 3 : 2;
 
+	if (lvl < cv_lvl) {                             /* leaving the top level: at the step below's voltage */
+		if (!cv_set(cv_2150)) {
+			return false;
+		}
+		IODelay(100);
+		cv_level(2);
+	}
 	if (cv_hi && apc != cv_apc) {
 		if (!cv_set(CV_APM_MV)) {
 			return false;
@@ -101,6 +129,13 @@ cv_goto(uint32_t mv)
 			}
 			return false;                   /* (stuck on APC below the threshold: the caller pins the clock) */
 		}
+	}
+	if (lvl > cv_lvl) {                             /* to the top level: at the step below's voltage */
+		if (!cv_set(cv_2150)) {
+			return false;
+		}
+		IODelay(300);
+		cv_level(3);
 	}
 	return cv_set(mv);
 }
@@ -134,8 +169,14 @@ patch(m, '''	cv_boot = cv_now = s2;
 	} else {
 		cv_hi = 0;
 	}
+	(void)PE_parse_boot_argn("lv_cpu_acc", &cv_acc, sizeof(cv_acc));
+	IOLog("LVF rail: mem-acc 0x179d1368.. = %#x %#x %#x (lv_cpu_acc=%u)\\n", apcs_common[0x368 / 4], apcs_common[0x36c / 4],
+	    apcs_common[0x370 / 4], cv_acc);
+	if (apcs_common[0x368 / 4] != 0 || apcs_common[0x36c / 4] != 0 || apcs_common[0x370 / 4] != 0) {
+		cv_acc = 0;                             /* not the level 2 XBL is known to leave: hands off */
+	}
 	if (cv_hi && mode == 1) {
-		cv_top = CV_TOP_MV;
+		cv_top = cv_acc ? CV_TOP_MV : cv_2150;  /* without the top level, nothing above the step below's voltage */
 	} else {
 		cv_hi = 0;
 	}
@@ -184,7 +225,8 @@ broken:
 	cv_on = 0;
 	cv_now = cv_read(0, 0x40);
 	{
-		bool back = (!cv_apc || (cv_set(CV_APM_MV) && cv_mux(false))) && cv_set(cv_boot);
+		bool back = (cv_lvl == 2 || (cv_set(cv_2150) && (cv_level(2), true))) &&
+		    (!cv_apc || (cv_set(CV_APM_MV) && cv_mux(false))) && cv_set(cv_boot);
 		IODelay(500);
 		IOLog("LVF rail: a step failed going L %u -> %u: rail %s (S2 %u, S3 %u mV, %s), voltage steps off%s\\n", from, to,
 		    back ? "back at the boot value" : "NOT restored", cv_read(0, 0x40), cv_read(1, 0x40), cv_apc ? "APC" : "MX",
@@ -207,8 +249,8 @@ broken:
 patch(m, '''				    "%u touch | top %u%% cap %u | %u mV\\n", ns / 1000000, at[0] * 100 / all, at[1] * 100 / all, at[2] * 100 / all,
 				    at[3] * 100 / all, at[4] * 100 / all, at[5] * 100 / all, ups, downs, boosts, top, (uint32_t)gold_cap,
 				    cv_on ? cv_now : cv_read(0, 0x40));
-''', '''				    "%u touch | top %u%% cap %u | %u mV %s\\n", ns / 1000000, at[0] * 100 / all, at[1] * 100 / all, at[2] * 100 / all,
+''', '''				    "%u touch | top %u%% cap %u | %u mV %s acc %u\\n", ns / 1000000, at[0] * 100 / all, at[1] * 100 / all, at[2] * 100 / all,
 				    at[3] * 100 / all, at[4] * 100 / all, at[5] * 100 / all, ups, downs, boosts, top, (uint32_t)gold_cap,
-				    cv_on ? cv_now : cv_read(0, 0x40), cv_apc ? "apc" : "mx");
+				    cv_on ? cv_now : cv_read(0, 0x40), cv_apc ? "apc" : "mx", cv_lvl);
 ''')
 print('ok')
