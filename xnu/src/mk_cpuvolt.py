@@ -56,10 +56,8 @@ cv_read(unsigned which, unsigned reg)
 static bool
 cv_write_one(unsigned which, uint32_t mv)
 {
-	uint8_t lo = (uint8_t)mv, hi = (uint8_t)(mv >> 8);
-
-	return lv_pmic_byte(1, (CV_SID << 16) | (cv_base[which] + 0x40), &lo) == 0 &&
-	       lv_pmic_byte(1, (CV_SID << 16) | (cv_base[which] + 0x41), &hi) == 0 && cv_read(which, 0x40) == mv;
+	/* both bytes in one SPMI write, as Linux's qpnp-regulator does: single bytes were accepted and ignored (run bb1) */
+	return lv_pmic_word((CV_SID << 16) | (cv_base[which] + 0x40), (uint16_t)mv) == 0 && cv_read(which, 0x40) == mv;
 }
 
 /* both phases to mv (768..the boot value: the upper byte stays 0x03); false = not done */
@@ -104,18 +102,15 @@ cv_start(void)
 	}
 	cv_boot = cv_now = s2;
 	if (mode == 2) {
-		uint8_t lo = (uint8_t)(s2 - 4), hi = (uint8_t)((s2 - 4) >> 8);
-		int w = lv_pmic_byte(1, (CV_SID << 16) | (cv_base[0] + 0x40), &lo);
-		w |= lv_pmic_byte(1, (CV_SID << 16) | (cv_base[0] + 0x41), &hi);
+		lv_pmic_owners((CV_SID << 8) | (cv_base[0] >> 8));
+		lv_pmic_owners((CV_SID << 8) | (cv_base[1] >> 8));
+		int w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)(s2 - 4));
 		IODelay(2000);
-		IOLog("LVF rail test: S2 written %u mV (%s): S2 set %u in force %u, S3 set %u in force %u\\n", s2 - 4,
-		    w == 0 ? "ok" : "REFUSED", cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
-		lo = (uint8_t)s2;
-		hi = (uint8_t)(s2 >> 8);
-		w = lv_pmic_byte(1, (CV_SID << 16) | (cv_base[0] + 0x40), &lo);
-		w |= lv_pmic_byte(1, (CV_SID << 16) | (cv_base[0] + 0x41), &hi);
+		IOLog("LVF rail test: S2 written %u mV in one write (%d): S2 set %u in force %u, S3 set %u in force %u\\n", s2 - 4,
+		    w, cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
+		w = lv_pmic_word((CV_SID << 16) | (cv_base[0] + 0x40), (uint16_t)s2);
 		IODelay(2000);
-		IOLog("LVF rail test: S2 back (%s): S2 set %u in force %u, S3 set %u in force %u\\n", w == 0 ? "ok" : "REFUSED",
+		IOLog("LVF rail test: S2 back (%d): S2 set %u in force %u, S3 set %u in force %u\\n", w,
 		    cv_read(0, 0x40), cv_read(0, 0x42), cv_read(1, 0x40), cv_read(1, 0x42));
 		return;
 	}
@@ -143,12 +138,8 @@ cv_gold_step(uint32_t from, uint32_t to)
 broken:
 	/* the boot value back (with the clock where it is or lower, that is always enough), and no more of this */
 	cv_on = 0;
-	{
-		uint8_t lo = (uint8_t)cv_boot, hi = (uint8_t)(cv_boot >> 8);
-		for (unsigned i = 0; i < 2; i++) {
-			(void)lv_pmic_byte(1, (CV_SID << 16) | (cv_base[i] + 0x40), &lo);
-			(void)lv_pmic_byte(1, (CV_SID << 16) | (cv_base[i] + 0x41), &hi);
-		}
+	for (unsigned i = 0; i < 2; i++) {
+		(void)lv_pmic_word((CV_SID << 16) | (cv_base[i] + 0x40), (uint16_t)cv_boot);
 	}
 	IODelay(500);
 	IOLog("LVF rail: a write failed going L %u -> %u: back to %u mV (S2 %u, S3 %u), voltage steps off\\n", from, to, cv_boot,
@@ -227,4 +218,79 @@ patch(m, '''		if (want > limit) {
 			want = limit;
 		}
 		if (want != cd_cur) {''')
+patch(m, '''int lv_pmic_byte(int write, unsigned addr, uint8_t *val);       /* bsd/dev/sweet_usb.c */
+''', '''int lv_pmic_byte(int write, unsigned addr, uint8_t *val);       /* bsd/dev/sweet_usb.c */
+int lv_pmic_word(unsigned addr, uint16_t val);                  /* two bytes in one write (mk_cpuvolt.py) */
+void lv_pmic_owners(unsigned peripheral);                       /* a line: which channels name it, and whose they are */
+''')
+
+u = f'{tree}/bsd/dev/sweet_usb.c'
+patch(u, '''/* Read, change the masked bits, write back. */
+''', '''/*
+ * lavender (mk_cpuvolt.py): two bytes at addr and addr + 1 in ONE SPMI write (addr = slave << 16 | register).
+ * A regulator's set point (FTS426 0x40 / 0x41) takes only this: single-byte writes are acknowledged
+ * and ignored. 0 on success, as lv_pmic_byte.
+ */
+int lv_pmic_word(unsigned addr, uint16_t val);
+int
+lv_pmic_word(unsigned addr, uint16_t val)
+{
+	int r = -1, channel;
+	static vm_offset_t maps[512];
+
+	lv_spmi_lock();
+	channel = spmi_channel(addr >> 8);
+	if (channel >= 0) {
+		vm_offset_t ch = maps[channel];
+		if (ch == 0) {
+			ch = ml_io_map(SPMI_CHNLS_PA + 0x8000u * (uint32_t)channel, 0x1000);
+			maps[channel] = ch;
+		}
+		if (ch == 0) {
+			r = -1;
+		} else if ((usb_rd(spmi_cnfg_map, 0x700 + 4 * (unsigned)channel) & 7) != 0) {
+			r = -4;                         /* channel not ours */
+		} else {
+			*(volatile uint32_t *)(ch + SPMI_WDATA) = val;
+			__asm__ volatile ("dsb sy" ::: "memory");
+			*(volatile uint32_t *)(ch + SPMI_CMD) = ((addr & 0xffu) << 4) | 1u;     /* write, 2 bytes */
+			__asm__ volatile ("dsb sy" ::: "memory");
+			r = -3;
+			for (int i = 0; i < 1000; i++) {
+				uint32_t st = usb_rd(ch, SPMI_STATUS);
+				if (st & 1) {
+					r = (st & 0xe) ? -2 : 0;
+					break;
+				}
+				delay(1);
+			}
+		}
+	}
+	lv_spmi_unlock();
+	return r;
+}
+
+/* lavender (mk_cpuvolt.py): which arbiter channels name a peripheral (slave << 8 | peripheral) and who owns each */
+void lv_pmic_owners(unsigned peripheral);
+void
+lv_pmic_owners(unsigned peripheral)
+{
+	char line[160];
+	int n = 0;
+
+	lv_spmi_lock();
+	(void)spmi_channel(peripheral);         /* (maps the tables) */
+	vm_offset_t core = ml_io_map(SPMI_CORE_PA, 0x1000);
+	for (unsigned i = 0; i < 512 && core != 0 && spmi_cnfg_map != 0 && n < (int)sizeof(line) - 24; i++) {
+		uint32_t map = usb_rd(core, 0x800 + 4 * i);
+		if (map != 0 && ((map >> 8) & 0xfff) == peripheral) {
+			n += snprintf(line + n, sizeof(line) - (size_t)n, " ch %u owner %u", i, usb_rd(spmi_cnfg_map, 0x700 + 4 * i) & 7);
+		}
+	}
+	lv_spmi_unlock();
+	printf("LV SPMI: peripheral %#x:%s\\n", peripheral, n ? line : " no channel");
+}
+
+/* Read, change the masked bits, write back. */
+''')
 print('ok')
