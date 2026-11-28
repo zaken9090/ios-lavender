@@ -15,6 +15,19 @@ S4. Back to GPU + DDR: voltage first (the rail does not follow our vote: PM660L 
     by default again (xnu 1171: 2 of 13 boots hung right after a 300 -> 600 step, one not recovered).
 S5. Smoothness of the whole system (late frames, not averages: SWEET FPS "late" / gaps).
 
+S3 in steps (user 2026-11-28: S3 before S2; "also sort out the voltage that is missing for the top clock"):
+ 1. (done, xnu 1174) the Gold clock follows the load, 1113..2208 MHz, touch boost; rail untouched (868 mV).
+ 2. (xnu 1175, lv_cpu_volt=1, being tested) the rail goes down with the clock: 768 mV to 1401 MHz, 828 at 1747.
+ 3. the stock voltage for the top clocks: 1958 MHz ~885 mV, 2150 MHz 937, 2208 MHz 948 (now 868: 80 mV
+    under). Above 872 mV the array power mux goes MX -> APC first (0x179d0010 = 2, wait 0x179d0018 & 0x1f
+    == 3; back: 0, wait == 0), as clk-cpu-osm.c programs the OSM to do; the OSM table has no APCS mem-acc
+    registers on this chip.
+ 4. Silver, when the cores exist (S2).
+For S4, found on the way (stock DT, cpr4-ctrl@05061000 "gfx"): GPU corners 160 / 266 / 370 / 465 / 588 /
+647 / 750 MHz with CX levels 0x40 0x40 0x80 0xc0 0x100 0x140 0x180, ceilings 585..1070 mV, and a
+**gfx mem-acc bit** (0x01fcf004 bit 0: 1 up to 370 MHz, 0 from 465 MHz) that we never switch - a
+candidate for the hangs after 300 -> 600 MHz steps.
+
 State 2026-11-28 15:45 (docs/CORES.md, GPU-PLAN.md): S1 done. Measured for S2: with the background quiet
 the late frames in Settings stay (4-8 %), so E cores would help the minute after boot (extensions killed
 on check-in timeouts, the wallpaper late) rather than steady scrolling; Gold 2208 MHz halves the late
