@@ -1,0 +1,22 @@
+lavender: sweetfb_lock=1 on a 60 Hz panel - the least wait to the next tick is a quarter frame, not 12 ms (generator: xnu/src/mk_vlock60.py)
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+index d1a6f2c..da983e4 100644
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -792,7 +792,14 @@ AppleCLCD::vsyncNext(void)
+ 		}
+ 	}
+ 	uint32_t next = left + lock_us;
+-	while (next < 12000) {
++	/* lavender (mk_vlock60.py): 12 ms was for a 127 Hz panel (every second frame); a 60 Hz one gets every frame */
++	static uint32_t min_arg, min_read;
++	if (!min_read) {
++		min_read = 1;
++		PE_parse_boot_argn("sweetfb_lock_min_us", &min_arg, sizeof(min_arg));
++	}
++	uint32_t least = min_arg != 0 ? min_arg : fPanelUS > 12000 ? fPanelUS / 4 : 12000;
++	while (next < least) {
+ 		next += fPanelUS;
+ 	}
+ 	return next;
