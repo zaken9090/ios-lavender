@@ -27,6 +27,10 @@ memory it moves. No picture quality may be traded.
    DDR bandwidth: same fps at DDR 1017 and 1804 MHz); GPU DVFS 300 <-> 600 MHz by default: home
    21.4 -> 24.4 fps. Next: the rail with the clock (power), why the latency is ~800 ns (VBIF / bus
    settings against Linux), native resolution (1125x2436 is drawn, panel is 1080x2340).
+8. (2026-11-28, profile pf7) backboardd on the home screen: surface_changed 15 % of its CPU
+   (patch_sumfast.py: -21 % of that). The ~800 ns latency: BIMC port already bypass, SMMU identity -
+   taken as the SoC's own. Next: modify bits from the kernel instead of sums (own wired surfaces),
+   sharing app surfaces needs SMMU translation (gpu_identity=0).
 
 ## P2 - safety: temperature (done: xnu 1165)
 

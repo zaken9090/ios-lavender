@@ -443,3 +443,14 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   sixteenth; malloc ~300. Kernel: at interrupts on again (caller unknown). 8 IOSurfaces shared, 139
   copied - each copied one is added up every frame. patch_sumfast.py (four hash chains + prefetch, same
   decisions) and glsharewhy=N (why a surface is copied) in userland 46134608630.
+- 2026-11-28 13:00, surface sums: patch_sumfast.py (kept, no picture change) cut surface_changed from 1941
+  to 1533 samples (pf7 -> pf8, -21 %: the sum waits on memory more than on the multiply). Home fps does
+  not show it: the same build gave 26.4 (an1) and 24.5 (ap1) - the home bench spreads +-1 fps, judge CPU
+  changes by the profile. glsharewhy (an1): 132 copied for format (A008 alpha masks 115, LA08, RGhA),
+  43 BGRA refused - by the kernel, not Mesa: with gpu_identity a surface is shared only if physically
+  contiguous (RedwoodGPU surfaceBuffer), app/IOSurface memory is 16 KB pages. Mesa's 256-byte pitch rule
+  relaxed (freedreno-pitch64.patch, ao1) shared only 3 more surfaces and Settings fell to 51: removed.
+  Next idea: the kernel says whether a surface's pages were written (pmap modify bits) instead of eagl
+  adding them up - exact and no memory reads; safe for IOSurface-owned wired memory only (clearing the
+  bit on pageable client memory can make the VM drop dirty pages), so first count summed bytes by kind
+  (wrapped client memory vs own).
