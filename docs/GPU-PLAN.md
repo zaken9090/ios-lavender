@@ -470,3 +470,10 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   User's manual test of run-46125445657 + userland 46134608630: no tearing / flicker / shake, but dips
   everywhere, Settings too. glsumstat (aq1, before the hang): own small 45 looks 3969 KB 1899 us a
   second on the lock screen; nothing wrapped - to repeat in Settings and the App Library.
+- 2026-11-28 14:10, **smoothness is measured by late frames now** (tools/late.py over SWEET FPS lines), not
+  by the average: Settings at "59.5 fps" has 4-8 % late frames and only 0-31 % of its seconds clean.
+  What was found (docs/CORES.md, section 3): not a lack of cores; Gold 2208 MHz halves the late frames;
+  backboardd's GL frame is short (1.4 ms median) and 86 % of late frames start late; every IOSurface
+  creation hunted for contiguous memory and failed slowly (xnu 1172: backoff); the panel runs at ~61.5 Hz
+  against a ~59.3 Hz free-running tick for CoreAnimation (sweetfb_lock=1 alone is worse: 48-56 fps).
+  Kernel run-46139734915 = 1171 with DVFS off by default (bench as1 / as2 / at1 / au1: 0 hangs).

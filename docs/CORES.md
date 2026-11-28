@@ -54,9 +54,22 @@ lavender project's patches 0993 / 0994 / 1003 / 1026 and its commit cbc75fa, our
 
 Bench "Settings slow drag", kernel run-46125445657, GPU 300 MHz, tools/late.py:
 
-| run | when | CPU load | late frames | seconds without a late frame |
-|---|---|---|---|---|
-| ar1 | right after boot | 309 % | 5.4 % | 6 % |
-| ar2 | same boot, after 8 min idle | (see GPU-PLAN) | | |
+| run | when | Gold | CPU load | late frames | seconds without a late frame |
+|---|---|---|---|---|---|
+| ar1 | right after boot | 1747 MHz | 309 % | 5.4 % | 6 % |
+| ar2 | same boot, after 8 min idle (a ReportCrash ran) | 1747 MHz | 289 % | 8.3 % | 6 % |
+| au2 | second bench of a boot | 1747 MHz | 220 % | 8.3 % | 0 % |
+| as1 | right after boot | 2208 MHz | 330 % | 8.7 % | 6 % |
+| as2 | second bench of a boot | 2208 MHz | 218 % | 4.1 % | 31 % |
 
-If the late frames stay with the background quiet, moving daemons to E cores will not cure them.
+With the background quiet (170-220 % of 400 % used: backboardd ~113 %, Preferences ~40 %, SpringBoard
+~20 %) the late frames stay. **Cores are not what Settings lacks**; E cores would help the minutes after
+boot and bursts (ReportCrash, daemons), not the steady dips. A faster Gold clock halves them (as2).
+Per-frame lines (touch_lat=1, au2): a GL frame of backboardd takes 1.4 ms (median; p99 12.7 ms); 86 % of
+the late frames begin late after a short frame - the delay is before drawing. Found there:
+- every IOSurface an app makes asks for contiguous memory first and the request fails after two scans of
+  all pages and a zone_gc (xnu 1172 backs off, as the first project's patch 1000 did);
+- the panel refreshes at ~61.5 Hz (SWEET INTF1: 308-314 frames per 300 ticks) while CoreAnimation gets a
+  free-running ~59.3 Hz tick: about two repeated frames a second by construction. sweetfb_lock=1 (tick
+  from the panel) gave 48-56 fps in Settings (at1 / at2): the budget becomes 16.26 ms. To do: the panel
+  at 60.0 Hz (DSI timing) and then the tick from the panel.
