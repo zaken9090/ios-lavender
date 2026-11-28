@@ -43,4 +43,4 @@ if (-not $NoBench) {
     $b = python tools\bench.py $Tag --log "..\dump\bench-$Tag.txt" --settle 2 2>&1 | Select-String "^BENCH" | Select-Object -Last 1
     "$Extra -> $b"
 }
-if ($Park) { To-Fastboot; "parked in fastboot: " + ((& ..\platform-toolsastboot.exe getvar battery-voltage 2>&1 | Select-String "battery-voltage") -as [string]) }
+if ($Park) { To-Fastboot; "parked in fastboot: " + ((& ..\platform-tools\fastboot.exe getvar battery-voltage 2>&1 | Select-String "battery-voltage") -as [string]) }
