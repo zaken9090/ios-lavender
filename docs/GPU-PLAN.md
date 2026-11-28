@@ -622,3 +622,17 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   - GFX mem-acc (0x01fcf004 bit 0) = 0: the value for 465 MHz and up - right for a CX that stays high.
   - xnu 1177 (mk_gpupll.py): GPU PLL0 for a fixed lv_gpu_mhz (588, 647) and as the governor's top
     (lv_gpu_hi=647), the RCG moved between GPLL0 / 2 and PLL0 / 2; CX voted on rwcx 0 as well.
+- 2026-11-28 23:10, S4 runs with kernel run-46161087934 (xnu 1177, GPU PLL0):
+  - bt1 (lv_gpu_mhz=588): "PLL0: 588 MHz x 2 locked (L 61 alpha 0x4000000000)", RCG cfg 0x103; home 24.1 fps,
+    Settings 59.0, rec 0/0, 70 C.
+  - **bu1 (lv_gpu_mhz=647): PLL locked (L 67), but the GPU stopped within ~20 s** ("no answer" at fence
+    724, recovery FAILED), backboardd died twice, the user saw artefacts on the panel. Back at 300 MHz
+    the picture is clean (ui_bv1_2_unlocked.png). So with CX at 848 mV the limit is between 600 and
+    647 MHz: 848 mV is the NOM level's voltage (stock: 588 MHz), and 647 needs the next level.
+  - CX does not follow our votes: rwcx 0 swen 1 + vlvl 0x180 (active set), also with the DDR at 1017 MHz
+    (bv1): PM660L S3 stays 0x350 (848 mV); rwmx the same (S5 908 mV). The RPM acks without an error
+    (our reply parser does read "err" messages).
+  - The GX power switch is as stock leaves it in BHS mode (PWRSWITCH_CTRL 0x3e, status 0x28 = 3:
+    BHS_EN_REST_ACK set); our comment in TopazRpm.cpp numbers the bits one too high, the result is right.
+  - Next (kernel being built): the CX vote in both RPM sets - the bus and DDR votes that do take effect
+    are written to the sleep set as well.
