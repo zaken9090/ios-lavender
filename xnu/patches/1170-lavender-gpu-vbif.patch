@@ -1,0 +1,104 @@
+lavender: LVV line - bytes the GPU moves through its VBIF, countables by boot-arg lv_vbif / lv_vbif_sweep (generator: xnu/src/mk_gpuvbif.py)
+
+diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
+index 4fb1bc3..7674fdd 100644
+--- a/iokit/Kernel/arm/LavenderMetrics.cpp
++++ b/iokit/Kernel/arm/LavenderMetrics.cpp
+@@ -49,6 +49,8 @@ extern unsigned int lvm_level __asm("_memorystatus_level");
+ 
+ /* TopazAdreno.cpp */
+ extern "C" bool redwood_gpu_counters(uint64_t *out, uint32_t count);
++extern "C" bool redwood_gpu_vbif(uint64_t *out, const uint8_t *sel_next);
++static uint32_t vbif_sel, vbif_sweep;      /* lv_vbif, lv_vbif_sweep (mk_gpuvbif.py) */
+ extern "C" bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
+ 
+ static volatile uint32_t *tm, *pll_gold, *pll_silver, *gold_rcg, *apcs_common;
+@@ -456,6 +458,32 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 				had = false;
+ 			}
+ 		}
++		if (vbif_sel != 0 || vbif_sweep != 0) {
++			/* VBIF bytes moved (xnu/src/mk_gpuvbif.py) */
++			static uint8_t cur[4];
++			static bool vhad;
++			static uint32_t base;
++			uint8_t next[4];
++			uint64_t v[7];
++			for (int i = 0; i < 4; i++) {
++				next[i] = vbif_sweep != 0 ? (uint8_t)((base + i) & 0x7f) : (uint8_t)(vbif_sel >> (8 * i));
++			}
++			if (redwood_gpu_vbif(v, next)) {
++				if (vhad && ns != 0) {
++					IOLog("LVV %llu ms: sel %u %u %u %u: %llu %llu %llu %llu | pwr %llu %llu %llu\n", ns / 1000000,
++					    cur[0], cur[1], cur[2], cur[3], v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
++				}
++				for (int i = 0; i < 4; i++) {
++					cur[i] = next[i];
++				}
++				if (vbif_sweep != 0) {
++					base = (base + 4) & 0x7f;
++				}
++				vhad = true;
++			} else {
++				vhad = false;
++			}
++		}
+ 		if (top_n != 0 && !quiet) {
+ 			proc_line(ns);
+ 		}
+@@ -480,6 +508,8 @@ lv_metrics_start(void)
+ 	(void)PE_parse_boot_argn("lv_metrics", &period_ms, sizeof(period_ms));
+ 	(void)PE_parse_boot_argn("lv_metrics_khz", &khz_every, sizeof(khz_every));
+ 	(void)PE_parse_boot_argn("lv_metrics_top", &top_n, sizeof(top_n));
++	(void)PE_parse_boot_argn("lv_vbif", &vbif_sel, sizeof(vbif_sel));
++	(void)PE_parse_boot_argn("lv_vbif_sweep", &vbif_sweep, sizeof(vbif_sweep));
+ 	(void)PE_parse_boot_argn("lv_therm_hi", &therm_hi, sizeof(therm_hi));
+ 	therm_lo = therm_hi > 10 ? therm_hi - 10 : 0;
+ 	(void)PE_parse_boot_argn("lv_therm_lo", &therm_lo, sizeof(therm_lo));
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 1a7ad26..7c241d2 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -55,6 +55,7 @@ void redwood_gpu_report(const char *why);
+ bool redwood_gpu_recover(void);
+ bool redwood_gpu_stats(uint64_t *busy, uint32_t *mhz, uint32_t *submits, uint32_t *recovered, uint32_t *failed);
+ bool redwood_gpu_counters(uint64_t *out, uint32_t count);
++bool redwood_gpu_vbif(uint64_t *out, const uint8_t *sel_next);
+ void redwood_gpu_stop(void);
+ void redwood_tl(const char *format, ...) __printflike(1, 2);
+ uint32_t gpu_log;
+@@ -1277,6 +1278,34 @@ redwood_gpu_report(const char *why)
+  */
+ static uint32_t lv_gpu_recovered, lv_gpu_recover_failed;
+ 
++/*
++ * lavender (mk_gpuvbif.py): VBIF counters 0-3 and power counters 0-2 into out[0..6] (counts since the
++ * last call), then cleared and counters 0-3 set to countables sel_next[0..3].
++ */
++bool
++redwood_gpu_vbif(uint64_t *out, const uint8_t *sel_next)
++{
++	if (!ready) {
++		return false;
++	}
++	for (uint32_t n = 0; n < 4; n++) {
++		uint32_t lo = gpu_rd(0x30d8 + n);
++		out[n] = ((uint64_t)gpu_rd(0x30e0 + n) << 32) | lo;
++		gpu_wr(0x30c8 + n, 1);
++		gpu_wr(0x30c8 + n, 0);
++		gpu_wr(0x30d0 + n, sel_next[n] & 0x7fu);
++		gpu_wr(0x30c0 + n, 1);
++	}
++	for (uint32_t n = 0; n < 3; n++) {
++		uint32_t lo = gpu_rd(0x3110 + n);
++		out[4 + n] = ((uint64_t)gpu_rd(0x3118 + n) << 32) | lo;
++		gpu_wr(0x3108 + n, 1);
++		gpu_wr(0x3108 + n, 0);
++		gpu_wr(0x3100 + n, 1);
++	}
++	return true;
++}
++
+ /*
+  * lavender (mk_gpucounters.py): the counters of the LVG line, in its order: UCHE 0-3, TP 0-2, SP 0-2,
+  * RB 0-3 (RBBM_PERFCTR_*_LO, the high word follows each).
