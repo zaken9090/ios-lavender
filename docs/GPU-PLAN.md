@@ -527,3 +527,21 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   Fixed 2208 MHz gave the same late frames at 61-68 C (as2, ax1-ax3); fixed 1747 MHz 6.3-8.3 %. Time at
   each clock: 80-99 % at 2208 while benched, 14-18 % at 1113 between the phases; idle (75 s): 100 % at
   1113 MHz, cores 1-3 %, 46-47 C, the battery charging at 118-121 mA. 0.1-0.3 steps a second, none failed.
+- 2026-11-28 18:00, **the Gold rail: how its set point is written** (PLAN S3 steps 2-3; runs bb1, bc1).
+  - PM660 S2 and S3 (0x1700 / 0x1a00, slave 1): single-byte writes to 0x40 / 0x41 are acknowledged and
+    ignored (bb1), a two-byte write to S2 as well (bc1). A two-byte write (WDATA = mV, command
+    (0x40 << 4) | 1) to **S3 changes both** (S3 and S2: set point and in-force 868 -> 864): S3 is the master
+    phase. S1 (Silver, 0x1400) takes its own two-byte write (872 -> 868 -> 872). Channels 53 (S2), 66
+    (S3), 27 (S1), all owned by the application CPU. Upper limit registers 0x68 / 0x69 = 1396 mV.
+  - The cluster's SAW (0x17812000, version 0x40010001 = v4.1 layout: VCTL +0x900, AVS +0x904.., PMIC_STS
+    +0xc18, ID +0xc04 = 0x2020016f) never sent anything (VCTL 0, PMIC_STS 0): not used here.
+  - Array power mux: mode 0x179d0010 = 0, status 0x179d0018 = 0: on MX, as it should be below 872 mV.
+  - GPU mem-acc 0x01fcf004 = 0: already the value for 465 MHz and up - not what hangs the 300 -> 600 step.
+  - **Do not drive the SPMI arbiter with lv:poke from the host**: the third hand-made write (S3 back to
+    868 mV: data register, then the command, two USB commands apart) reset the phone into MIUI - the
+    data register is not the channel's alone (it read back what was written on another channel), so
+    something else's data went out as the set point. In the kernel the two writes are one step under
+    the SPMI lock (lv_pmic_word). The phone is alive (MTP "Redmi Note 7"); it needs the keys to get
+    back to fastboot.
+  - xnu 1175 now writes S3 only and checks S2 follows; xnu 1176 adds 885 / 937 / 948 mV for 1958 / 2150 /
+    2208 MHz through the mux (lv_cpu_volt=1 lv_cpu_volt_hi=1). Both off by default, not run yet.
