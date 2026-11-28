@@ -287,3 +287,5 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
   EL1. Above 872 mV the array power mux must go from MX to APC first: mode register 0x179d0010 = 2,
   status 0x179d0018 & 0x1f == 3 (Silver: 0x179d0004 / 0x179d000c). Not done yet: set 872 mV, switch the
   APM, set 948 mV, then L 115 - with a temperature limit, since heat grows.
+| glzero=0 (measurement) | GPU | no zero upload for new textures (an 11 MB upload for each full-size blur texture) (runs al2, control al3) | home 25.3 vs 25.0 fps, 31.2 vs 32.1 Mpx: noise | nothing changed; glzero stays on (picture) |
+| BIMC QoS of the GPU port (read only) | GPU | DT mas-oxili: BIMC qport 1, qos-mode bypass - check whether the port throttles (lv:peek 0x0100c200.., run am1) | BKE_EN 0 (bypass already), PRIOLVL / RD / WR override 0, health 0; MODE 0x390 same as the CPU and MDP ports | not the ~800 ns; no patch |

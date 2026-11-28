@@ -429,3 +429,9 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   run-46125445657, userland 46121702037, no extra boot-arg): home **24.4 fps** (21.4), Settings 59.9,
   0 GPU hangs; current under load +65 mA home, +130 mA Settings (it goes up on 50 ms bursts). Open:
   lower the rail with the clock (votes from the AP once broke the GPU), thresholds for Settings.
+- 2026-11-28 12:10, latency hunt, nothing found: the GPU's BIMC port (qport 1) is in bypass already
+  (BKE_EN 0, no override; run am1), glzero=0 changes nothing (al2 25.3 / control al3 25.0 fps). With the
+  SMMU in identity (M=0, no table walks), the SMMU impl-defs and the VBIF matching Linux, ~800 ns looks
+  like this SoC's own GPU DRAM latency (public measurements of Adreno DRAM latency are 500-800 ns).
+  In the home bench all four cores are at 100 %: backboardd ~100 % (one core), SpringBoard ~80 %, the
+  rest daemons still busy after boot (the bench starts at the lock screen).
