@@ -38,11 +38,11 @@ off unless a boot-arg). **SUPERSEDED** replaced by a later patch (code still the
 | 1027 fps-paths | DIAG | `sweetfps=1` (in e7 boot-args, so on in tests) |
 | 1028 vsync-hz | TRY-FAILED, inactive | `sweetfb_vhz`; memory note: "600 MHz, vhz, lock, arena gave nothing" |
 | 1029 surface-arena | TRY-FAILED, inactive | "none by default: measured, hardly used"; 296-line patch |
-| 1030 intf1-vsync | TRY-FAILED, inactive | `sweetfb_lock=1` only; same note |
+| 1030 intf1-vsync | FIX since 1173 (2026-11-28) | the tick from the panel is the default now (`sweetfb_lock=0` off); it failed before because vsyncNext never waited under 12 ms (a 127 Hz panel's rule) and threw ticks away on the 60 Hz panel |
 | 1031 fps-gaps | DIAG | `sweetfps` |
 | 1032 sampler-timing | DIAG | |
 | 1033 cpu-by-process | DIAG | SMC line, sampler default-on |
-| 1034 lock-offset | TRY-FAILED, inactive | `sweetfb_lock_us`, only with `sweetfb_lock=1` |
+| 1034 lock-offset | TUNABLE | `sweetfb_lock_us` (300): where in the panel's frame the tick falls; in use since 1173 |
 
 ## Touch (3), power (2), storage (1)
 

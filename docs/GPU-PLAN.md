@@ -477,3 +477,25 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   creation hunted for contiguous memory and failed slowly (xnu 1172: backoff); the panel runs at ~61.5 Hz
   against a ~59.3 Hz free-running tick for CoreAnimation (sweetfb_lock=1 alone is worse: 48-56 fps).
   Kernel run-46139734915 = 1171 with DVFS off by default (bench as1 / as2 / at1 / au1: 0 hangs).
+- 2026-11-28 15:00, smoothness, what the runs say (Settings slow drag, tools/late.py; fps / late frames /
+  clean seconds; second line of a pair = second bench of the boot, background quiet):
+
+  | runs | kernel, args | Settings |
+  |---|---|---|
+  | ar1, ar2 | 1171 (DVFS off) | 59.6 / 5.4 % / 6 %; 58.8 / 8.3 % / 6 % |
+  | as1, as2 | + lv_gold_l=115 (2208 MHz) | 59.3 / 8.7 % / 6 %; 59.8 / 4.1 % / 31 % |
+  | at1, at2 | + sweetfb_lock=1 (old lock) | 56.1 / 11.6 % / 0 %; 53.3 / 14.8 % / 0 % |
+  | av1, av2 | 1172 (contiguous backoff) | 54.2 / 13.0 % / 0 %; 53.6 / 15.6 % / 0 % (a "bad boot") |
+  | aw1, aw2 | 1173, sweetfb_lock=1 | 59.1 / 5.3 % / 6 %; 57.4 / 6.7 % / 0 % |
+  | ax1-ax3 | 1173, lock + 2208 MHz | 58.7 / 6.4 % / 18 %; 59.3 / 4.6 % / 18 %; 59.1 / 4.2 % / 18 % |
+
+  - xnu 1172: a failed contiguous request costs 30-49 ms on the application's thread ("1 failed in 30 ms,
+    44 skipped"); with the backoff 1-2 a bench instead of 28.
+  - "Bad boots" (ao1, av1 / av2; Settings 49-54 fps, 19.5-20 Mpx per shown frame against 17.6): the GPU
+    passes the same pixels a second, so backboardd draws its ~60 frames and ~7 a second are not shown in
+    their own panel frame. It holds for the whole boot and came with the free-running tick (57-58 ticks a
+    second against the panel's 60: the timer is re-armed after its handler). xnu 1173 takes the tick from
+    the panel by default; no bad boot in the two boots with it (too few to be sure).
+  - The floor of ~4-5 % late frames is left in every configuration (lock, Gold 2208, GPU 300 or DVFS,
+    quiet or busy background); they are spread evenly over frame numbers (not eagl's 20-frame line).
+    Next: who is late in those frames - the application's commit or backboardd's own preparation.
