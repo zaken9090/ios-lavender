@@ -140,6 +140,11 @@ patch(r, '''		if (gpu >= 11) {
 }
 ''')
 
+patch(r, '''/* lavender GPU steps 5-6 (lv_gpu=11): CP start and a first fence. See xnu/src/mk_gpu4.py. */
+''', '''static void lv_gpu_dvfs_loop(void);           /* lavender: mk_gpudvfs.py */
+/* lavender GPU steps 5-6 (lv_gpu=11): CP start and a first fence. See xnu/src/mk_gpu4.py. */
+''')
+
 m = f'{tree}/iokit/Kernel/arm/LavenderMetrics.cpp'
 patch(m, '''static uint32_t therm_hi = 85, therm_lo;
 ''', '''static uint32_t therm_hi = 85, therm_lo;
