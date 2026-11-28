@@ -435,3 +435,11 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   like this SoC's own GPU DRAM latency (public measurements of Adreno DRAM latency are 500-800 ns).
   In the home bench all four cores are at 100 %: backboardd ~100 % (one core), SpringBoard ~80 %, the
   rest daemons still busy after boot (the bench starts at the lock screen).
+- 2026-11-28 12:20, **backboardd on the home screen** (profile pf7: sweetprof=backboardd, 40 s of slow home
+  swipes with tools/uishot.py --noshots, ~26 fps): 16384 samples, user 12983 / kernel 3401. libOSMesa 3353
+  (flat: slab_destroy_child, fd_submit_append_bo, _mesa_use_program...), QuartzCore 3119 (CA's layer-tree
+  update), **libtopaz-gl 2503, of it surface_changed 1941 = 15 % of backboardd** (Settings: 3 %): ~1000 in
+  the full sum of surfaces below 1 MB, ~700 in the word-every-512-bytes look at big ones, ~200 in the
+  sixteenth; malloc ~300. Kernel: at interrupts on again (caller unknown). 8 IOSurfaces shared, 139
+  copied - each copied one is added up every frame. patch_sumfast.py (four hash chains + prefetch, same
+  decisions) and glsharewhy=N (why a surface is copied) in userland 46134608630.

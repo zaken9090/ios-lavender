@@ -1,0 +1,22 @@
+lavender: imported IOSurfaces need only the a5xx's 64-byte pitch when rendering straight to memory (sysmem).
+Run an1 (glsharewhy): 43 BGRA surfaces refused by fd_resource_from_handle's 256-byte (64 px) GMEM pitch rule.
+
+--- a/src/gallium/drivers/freedreno/freedreno_resource.c
++++ b/src/gallium/drivers/freedreno/freedreno_resource.c
+@@ -1552,6 +1552,16 @@
+    else
+       rsc->layout.pitchalign = MAX2(rsc->layout.pitchalign, 5);
+ 
++#ifdef __APPLE__
++   /* lavender (freedreno-pitch64.patch): rendering straight to memory (FD_MESA_DEBUG=sysmem, the
++    * default on lavender) never resolves GMEM into an imported buffer, so the hardware's 64-byte
++    * pitch is enough: IOSurfaces of icons (87 px, 384 bytes a row) and wallpapers (1326 px, 5312)
++    * become the texture's memory instead of copies added up every frame.
++    */
++   if (is_a5xx(screen) && FD_DBG(SYSMEM))
++      rsc->layout.pitchalign = 6;
++#endif
++
+    if (rsc->layout.pitch0 < (prsc->width0 * rsc->layout.cpp) ||
+        fd_resource_pitch(rsc, 0) != rsc->layout.pitch0)
+       goto fail;
