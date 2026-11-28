@@ -1,4 +1,4 @@
-lavender: GPU clock follows the load, 300 <-> 600 MHz (lv_gpu_dvfs=1; generator: xnu/src/mk_gpudvfs.py)
+lavender: GPU clock follows the load, 300 <-> 600 MHz (default on, lv_gpu_dvfs=0 off; generator: xnu/src/mk_gpudvfs.py)
 
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
 index 7674fdd..edd0ef7 100644
@@ -45,7 +45,7 @@ index 7c241d2..3c5e5b7 100644
  	IOLog("TopazGPU: Adreno 512 ready, RedwoodGPU published\n");
  	uint32_t f = redwood_gpu_submit(NULL, NULL, 0);     /* self-test: an empty submission's fence */
 diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
-index ea1186f..560d1bf 100644
+index ea1186f..a750756 100644
 --- a/iokit/Kernel/arm/TopazRpm.cpp
 +++ b/iokit/Kernel/arm/TopazRpm.cpp
 @@ -468,11 +468,12 @@ lavender_gpu_probe(uint32_t level)
@@ -53,7 +53,7 @@ index ea1186f..560d1bf 100644
  	 * Without it the GX GDSC never reports PWR_ON and unclamping it stops the display (and touch).
  	 */
 -	uint32_t lvl = 0x80, mhz = 300;
-+	uint32_t lvl = 0x80, mhz = 300, dvfs = 0;
++	uint32_t lvl = 0x80, mhz = 300, dvfs = 1;
  	/* lavender: lv_gpu_mhz=600 - GPLL0 / 1 on rail level 0x180 (gfx corner 7, good to 647 MHz); mk_gpu600.py */
  	PE_parse_boot_argn("lv_gpu_mhz", &mhz, sizeof(mhz));
 -	if (mhz >= 600) {
@@ -164,7 +164,7 @@ index ea1186f..560d1bf 100644
 +extern "C" void
 +lavender_gpu_dvfs_start(void)
 +{
-+	uint32_t dvfs = 0;
++	uint32_t dvfs = 1;
 +	thread_t thread;
 +	PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
 +	if (dvfs && kernel_thread_start(lv_gpu_dvfs_thread, NULL, &thread) == KERN_SUCCESS) {
