@@ -24,6 +24,12 @@ S3 in steps (user 2026-11-28: S3 before S2; "also sort out the voltage that is m
     2 / 0, wait 0x179d0018 & 0x1f == 3 / 0); the top step also needs mem-acc level 3 (0x179d1370 = 1,
     msm8998's registers; without it 948 mV corrupted the cores' work). Three boots clean.
  4. Silver, when the cores exist (S2).
+S4 state 2026-11-29 (GPU-PLAN 2026-11-28 22:10 .. 2026-11-29 00:45): the GPU sits on CX (no rail of its
+own); the chip's bin (0x87) ends at 647 MHz; clocks above 300 MHz come from GPU PLL0 now (xnu 1177) and
+the governor steps 300 <-> 588 MHz between two running sources by default (seven boots, no stop; home
+~25 fps). Open: 647 MHz stops within 20 s - CX stays 848-852 mV whatever level we vote (the RPM does act
+on other regulator requests of ours), and PM660L S4, named with S3 as VDD_CX in the stock DT, is off.
+
 For S4, found on the way (stock DT, cpr4-ctrl@05061000 "gfx"): GPU corners 160 / 266 / 370 / 465 / 588 /
 647 / 750 MHz with CX levels 0x40 0x40 0x80 0xc0 0x100 0x140 0x180, ceilings 585..1070 mV, and a
 **gfx mem-acc bit** (0x01fcf004 bit 0: 1 up to 370 MHz, 0 from 465 MHz) that we never switch - a

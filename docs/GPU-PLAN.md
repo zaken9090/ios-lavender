@@ -652,3 +652,8 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
     rec 0/0, no backboardd crash**; home 24.3-25.3 fps (300 MHz fixed: 21-22), Settings 57-60 fps; 71 C
     and 840-880 mA in the busy first bench. The old stepping (GPLL0 divider on the running source) stopped
     the GPU in 2 of 13 boots. Default again (xnu 1177 regenerated: lv_gpu_dvfs=0 off, lv_gpu_hi=588).
+- 2026-11-29 00:45, **known-good: kernel run-46165677545 (to 1177: GPU governor 300 <-> 588 MHz from GPU
+  PLL0 by default, Gold governor and rail) + userland 46157593238 (installed)**. ce1 / ce2 with no extra
+  boot-arg: home 25.1 / 25.2 fps, Settings 59.7 / 58.8 fps with 6.0 / 3.7 % late frames, rec 0/0, no crash;
+  68-69 C and 805 mA in the busy first bench, 63 C / 614 mA in the second. Open for S4: 647 MHz (CX held
+  at 852 mV; is PM660L S4, the rail's second phase in the stock DT, meant to be on?).
