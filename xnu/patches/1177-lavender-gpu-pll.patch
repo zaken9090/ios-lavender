@@ -1,0 +1,195 @@
+lavender: the GPU's own PLL for clocks above 300 MHz, up to the chip's 647 MHz; the governor moves the RCG between two running sources (lv_gpu_mhz, lv_gpu_hi; generator: xnu/src/mk_gpupll.py)
+
+diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
+index 7f18813..2fde110 100644
+--- a/iokit/Kernel/arm/LavenderMetrics.cpp
++++ b/iokit/Kernel/arm/LavenderMetrics.cpp
+@@ -662,6 +662,7 @@ cpu_dvfs_start(void)
+ 
+ static uint32_t therm_hi = 85, therm_lo;
+ extern "C" volatile uint32_t lv_gpu_hot;        /* TopazRpm.cpp GPU DVFS (mk_gpudvfs.py): 1 = hold 300 MHz */
++extern "C" volatile uint32_t lv_gpu_now_mhz;    /* TopazRpm.cpp: the gfx3d clock now (mk_gpupll.py) */
+ 
+ static void
+ thermal_guard(int hottest)
+@@ -901,6 +902,8 @@ metrics_thread(__unused void *arg, __unused wait_result_t w)
+ 			uint32_t cfg = gfx_cc != NULL ? gfx_cc[0x74 / 4] : 0;
+ 			if (((cfg >> 8) & 7) == 5) {
+ 				mhz = 1200 / ((cfg & 0x1f) + 1);        /* GPLL0 600 MHz, divider (d + 1) / 2 */
++			} else if (lv_gpu_now_mhz != 0) {
++				mhz = lv_gpu_now_mhz;                   /* a GPU PLL (xnu/src/mk_gpupll.py) */
+ 			}
+ 			if (gpu_had && ns != 0 && busy >= gpu_before) {
+ 				share = (busy - gpu_before) * 100000 / ((uint64_t)mhz * ns);    /* cycles / (MHz x ns / 1000) in percent */
+diff --git a/iokit/Kernel/arm/TopazRpm.cpp b/iokit/Kernel/arm/TopazRpm.cpp
+index cbd18c2..18b0d55 100644
+--- a/iokit/Kernel/arm/TopazRpm.cpp
++++ b/iokit/Kernel/arm/TopazRpm.cpp
+@@ -398,6 +398,66 @@ lv_branch(volatile uint32_t *b, uint32_t off, const char *name)
+ 	return false;
+ }
+ 
++/*
++ * lavender (mk_gpupll.py): the GPU PLLs (alpha PLLs at gpucc + 0x00 and + 0x40: +0 mode, +4 L, +8 / +0xc
++ * alpha, +0x10 user control) as Linux's clk-alpha-pll.c runs them, and the gfx3d root's source.
++ */
++extern "C" volatile uint32_t lv_gpu_now_mhz;    /* the gfx3d clock now (LavenderMetrics.cpp) */
++volatile uint32_t lv_gpu_now_mhz = 300;
++static uint32_t lv_gpu_hi_mhz = 647;            /* lv_gpu_hi: the governor's top clock */
++static bool lv_gpu_pll_ok;                      /* GPU PLL0 runs at 2 x lv_gpu_hi_mhz */
++
++/* GPU PLL `which` to 2 x mhz and on; false: no lock, left off */
++static bool
++lv_gpu_pll(unsigned which, uint32_t mhz)
++{
++	uint32_t base = which ? 0x40 : 0x00, khz = 2 * mhz * 1000, l = khz / 19200;
++	uint64_t alpha = ((uint64_t)(khz % 19200) << 40) / 19200;
++	uint32_t mode = lv_r(lv_gpucc, base), user;
++
++	if (mhz < 125 || mhz > 750) {
++		return false;
++	}
++	lv_w(lv_gpucc, base, mode & ~1u);               /* output off */
++	IODelay(2);
++	mode &= ~7u;
++	lv_w(lv_gpucc, base, mode);                     /* bypassed, in reset */
++	lv_w(lv_gpucc, base + 0x04, l);
++	lv_w(lv_gpucc, base + 0x08, (uint32_t)alpha);
++	lv_w(lv_gpucc, base + 0x0c, (uint32_t)(alpha >> 32));
++	user = lv_r(lv_gpucc, base + 0x10) & ~((3u << 20) | (0xfu << 8));       /* VCO range, post divider 1 */
++	user |= (khz >= 1000000 ? 0u : khz >= 500000 ? 2u : 3u) << 20;
++	user |= (1u << 24) | 1u;                        /* alpha on, main output */
++	lv_w(lv_gpucc, base + 0x10, user);
++	lv_w(lv_gpucc, base, mode | 2u);                /* BYPASSNL */
++	IODelay(10);                                    /* (5 us at least before the reset goes) */
++	lv_w(lv_gpucc, base, mode | 6u);                /* RESET_N */
++	for (int i = 0; i < 1000 && !(lv_r(lv_gpucc, base) & 0x80000000u); i++) {
++		IODelay(1);
++	}
++	if (!(lv_r(lv_gpucc, base) & 0x80000000u)) {
++		lv_w(lv_gpucc, base, mode);
++		LOG("LVGPU PLL%u: NO LOCK at %u MHz x 2 (L %u, mode %#x): left off", which, mhz, l, lv_r(lv_gpucc, base));
++		return false;
++	}
++	lv_w(lv_gpucc, base, mode | 7u);                /* OUTCTRL */
++	LOG("LVGPU PLL%u: %u MHz x 2 locked (L %u alpha %#llx, mode %#x user %#x)", which, mhz, l, alpha, lv_r(lv_gpucc, base),
++	    lv_r(lv_gpucc, base + 0x10));
++	return true;
++}
++
++/* the gfx3d root: source 5 = GPLL0 (600 MHz), 1 / 3 = GPU PLL0 / PLL1; div 1 = / 1, 3 = / 2 */
++static void
++lv_gpu_rcg(uint32_t src, uint32_t div, uint32_t mhz)
++{
++	lv_w(lv_gpucc, 0x1074, (src << 8) | div);
++	lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
++	for (int i = 0; i < 500 && (lv_r(lv_gpucc, 0x1070) & 1u); i++) {
++		IODelay(1);
++	}
++	lv_gpu_now_mhz = mhz;
++}
++
+ /* GDSC: clear SW_COLLAPSE, wait for PWR_ON */
+ static bool
+ lv_gdsc_on(uint32_t off, const char *name)
+@@ -472,8 +532,12 @@ lavender_gpu_probe(uint32_t level)
+ 	/* lavender: lv_gpu_mhz=600 - GPLL0 / 1 on rail level 0x180 (gfx corner 7, good to 647 MHz); mk_gpu600.py */
+ 	PE_parse_boot_argn("lv_gpu_mhz", &mhz, sizeof(mhz));
+ 	PE_parse_boot_argn("lv_gpu_dvfs", &dvfs, sizeof(dvfs));
+-	if (mhz >= 600 || dvfs) {
+-		lvl = 0x180;                    /* lv_gpu_dvfs (mk_gpudvfs.py): the rail for 600 from the start */
++	if (mhz > 300 || dvfs) {
++		lvl = 0x180;                    /* lv_gpu_dvfs (mk_gpudvfs.py): the rail for the top clock from the start */
++	}
++	PE_parse_boot_argn("lv_gpu_hi", &lv_gpu_hi_mhz, sizeof(lv_gpu_hi_mhz));
++	if (lv_gpu_hi_mhz <= 300 || lv_gpu_hi_mhz > 647) {
++		lv_gpu_hi_mhz = 647;            /* this chip's bin (fuse 0x7841a0: 0x87) ends at 647 MHz */
+ 	}
+ 	PE_parse_boot_argn("lv_gfx_lvl", &lvl, sizeof(lvl));
+ 	if (lvl) {
+@@ -481,15 +545,28 @@ lavender_gpu_probe(uint32_t level)
+ 		bool lv = topaz_rpm_write(0, 0x62706d73u, 3, 0x6c766c76u /* vlvl */, lvl);
+ 		LOG("LVGPU GX rail smpb3 swen %s vlvl %#x %s", en ? "acked" : "FAILED", lvl, lv ? "acked" : "FAILED");
+ 		IODelay(2000);
+-		if (mhz >= 600 && en && lv && lvl >= 0x180) {
++		if (lvl >= 0x180) {
++			/* mk_gpupll.py: stock's resource for CX as well (upwards only: nothing else of ours votes it) */
++			bool cen = topaz_rpm_write(0, 0x78637772u /* rwcx */, 0, 0x6e657773u /* swen */, 1);
++			bool clv = topaz_rpm_write(0, 0x78637772u, 0, 0x6c766c76u /* vlvl */, lvl);
++			LOG("LVGPU CX rwcx 0 swen %s vlvl %#x %s", cen ? "acked" : "FAILED", lvl, clv ? "acked" : "FAILED");
+ 			IODelay(3000);                                  /* the rail settles before the clock goes up */
+-			lv_w(lv_gpucc, 0x1074, (5u << 8) | 1u);         /* GPLL0 / 1 = 600 MHz */
+-			lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
+-			for (int i = 0; i < 200 && (lv_r(lv_gpucc, 0x1070) & 1u); i++) {
+-				IODelay(10);
++		}
++		if (mhz > 647) {
++			mhz = 647;
++		}
++		if (mhz == 600 && en && lv && lvl >= 0x180) {
++			lv_gpu_rcg(5, 1, 600);                          /* GPLL0 / 1 */
++		} else if (mhz > 300 && en && lv && lvl >= 0x180) {
++			lv_gpu_hi_mhz = mhz;
++			lv_gpu_pll_ok = lv_gpu_pll(0, mhz);             /* GPU PLL0 at 2 x mhz, RCG / 2 */
++			if (lv_gpu_pll_ok) {
++				lv_gpu_rcg(1, 3, mhz);
+ 			}
+-			LOG("LVGPU gfx3d 600 MHz: rcg cmd %#x cfg %#x", lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074));
++		} else if (dvfs && lv_gpu_hi_mhz != 600 && en && lv) {
++			lv_gpu_pll_ok = lv_gpu_pll(0, lv_gpu_hi_mhz);   /* kept running for the governor's steps */
+ 		}
++		LOG("LVGPU gfx3d %u MHz: rcg cmd %#x cfg %#x", (uint32_t)lv_gpu_now_mhz, lv_r(lv_gpucc, 0x1070), lv_r(lv_gpucc, 0x1074));
+ 	}
+ 
+ 	/* GFX LDO block (DT msm_gfx_ldo 0x506e000, BHS mode: all corners have allow-ldo-mode 0): read only */
+@@ -1205,13 +1282,16 @@ lavender_perf_thread(void *arg __unused, wait_result_t wr __unused)
+ extern "C" volatile uint32_t lv_gpu_hot;        /* LavenderMetrics thermal guard: hold 300 */
+ volatile uint32_t lv_gpu_hot;
+ 
++/* mk_gpupll.py: the top clock is GPU PLL0 / 2 (a second running source), 600 MHz without it; down is GPLL0 / 2 */
+ static void
+ lv_gpu_clock(bool high)
+ {
+-	lv_w(lv_gpucc, 0x1074, (5u << 8) | (high ? 1u : 3u));
+-	lv_w(lv_gpucc, 0x1070, lv_r(lv_gpucc, 0x1070) | 1u);
+-	for (int i = 0; i < 200 && (lv_r(lv_gpucc, 0x1070) & 1u); i++) {
+-		IODelay(1);
++	if (!high) {
++		lv_gpu_rcg(5, 3, 300);
++	} else if (lv_gpu_pll_ok) {
++		lv_gpu_rcg(1, 3, lv_gpu_hi_mhz);
++	} else {
++		lv_gpu_rcg(5, 1, 600);
+ 	}
+ }
+ 
+@@ -1228,7 +1308,8 @@ lv_gpu_dvfs_loop(void)
+ 	bool high = false;
+ 	uint64_t was = 0, t0 = 0, said = 0, at_high = 0, span = 0;
+ 	uint32_t ups = 0, downs = 0;
+-	LOG("LVDVFS on: %u ms, up above %u %% at 300, down below %u %% at 600", period, up, down);
++	LOG("LVDVFS on: %u ms, up above %u %% at 300, down below %u %% at %u MHz (%s)", period, up, down,
++	    lv_gpu_pll_ok ? lv_gpu_hi_mhz : 600, lv_gpu_pll_ok ? "GPU PLL0" : "GPLL0");
+ 	for (;;) {
+ 		IOSleep(period);
+ 		uint32_t hi = g_r(0x3b1), lo = g_r(0x3b0);
+@@ -1240,7 +1321,7 @@ lv_gpu_dvfs_loop(void)
+ 		absolutetime_to_nanoseconds(mach_absolute_time(), &now);
+ 		ns = now - t0;
+ 		if (t0 != 0 && busy >= was && ns != 0) {
+-			uint64_t share = (busy - was) * 100000 / ((uint64_t)(high ? 600 : 300) * ns);
++			uint64_t share = (busy - was) * 100000 / ((uint64_t)lv_gpu_now_mhz * ns);
+ 			bool want = high;
+ 			if (lv_gpu_hot) {
+ 				want = false;
+@@ -1262,8 +1343,8 @@ lv_gpu_dvfs_loop(void)
+ 		t0 = now;
+ 		if (now - said >= 1000000000ull) {
+ 			if (span != 0) {
+-				LOG("LVDVFS: %u ups, %u downs, %llu %% of the time at 600%s", ups, downs, at_high * 100 / span,
+-				    lv_gpu_hot ? " (hot: held at 300)" : "");
++				LOG("LVDVFS: %u ups, %u downs, %llu %% of the time at %u MHz%s", ups, downs, at_high * 100 / span,
++				    lv_gpu_pll_ok ? lv_gpu_hi_mhz : 600, lv_gpu_hot ? " (hot: held at 300)" : "");
+ 			}
+ 			said = now;
+ 			ups = downs = 0;
