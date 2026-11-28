@@ -251,6 +251,7 @@ real fix is found, such patches are taken out (or put behind a boot-arg) in a cl
 | glenv=FD_MESA_DEBUG=sysmem,ttile | GPU | tiled textures in Mesa to cut texture reads (run x1, 2026-11-28) | picture broken (user), texture misses 34 % against 23-25 % | rejected: picture quality |
 | glpreserve=2 (patch_damage.py) | GPU | copy only the box the other display surface lacks | first version: no gain, orange/pink bands on the home screen (user video 23-56-56) | opt-in only; to remove or redo |
 | glinuse=MS (patch_damage.py) | display | wait until the panel lets the display surface go | cured the tremble, Settings 50 -> 33 fps | superseded by scanout surfaces (xnu 1167, patch_scanout.py) |
+| patch_swaphook.py | GPU | copy a display frame out once, at CA's swap: libtopaz-inject interposes IOMobileFramebufferSwapBegin (userland 46084039497, bench aa1a) | the hook never ran (0 put off, no log line): dyld interposing does not reach calls between shared-cache libraries; Settings 43 fps against 50.5 | removed; replaced by patch_flushwho.py (glwho / glskip by call site) |
 | patch_bbdfull.py | display | CA_DISABLE_DIRTY_REGIONS=1 for backboardd (stale keyboard band at the bottom of the App Library, user video 18-58-15) | draws a frame unchanged (26.1 -> 27.0): the variable does not change how CA renders here | removed |
 
 ## New open items (2026-11-27 night: cores and clocks, docs/HARDWARE.md "CPU clocks, voltages, sensors")

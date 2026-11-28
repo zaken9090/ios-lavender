@@ -56,7 +56,7 @@ jobs:
           python3 userland/gpu/patch_preservelog.py work/gpu/eagl.c
           python3 userland/gpu/patch_damage.py work/gpu/eagl.c
           python3 userland/gpu/patch_scanout.py work/gpu/eagl.c
-          python3 userland/gpu/patch_swaphook.py work/gpu/eagl.c work/gpu/topaz_inject.c
+          python3 userland/gpu/patch_flushwho.py work/gpu/eagl.c
           python3 userland/gpu/patch_bbdnano.py work/gpu/bbd_wrap.c
           # Mesa patches of this repo (threaded context for OSMesa + a5xx fixes), applied with the base's by mk-mesa-mac.sh
           cp userland/mesa/*.patch work/mesa/
@@ -101,7 +101,7 @@ jobs:
             -framework CoreFoundation -framework IOKit -framework IOSurface -lobjc \
             $M/libOSMesa.8.dylib -o out/libtopaz-gl.dylib gpu/eagl.c gpu/gl_osmesa.c
           $CC -dynamiclib -install_name /usr/lib/libtopaz-inject.dylib \
-            -framework CoreFoundation -framework IOKit -lobjc -Wl,-not_for_dyld_shared_cache -Wl,-U,_IOMobileFramebufferSwapBegin \
+            -framework CoreFoundation -framework IOKit -lobjc \
             -o out/libtopaz-inject.dylib gpu/topaz_inject.c
           $CC -o out/backboardd gpu/bbd_wrap.c
           cp $M/libOSMesa.8.dylib out/
