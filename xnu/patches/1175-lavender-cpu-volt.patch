@@ -1,4 +1,4 @@
-lavender: the Gold rail (PM660 S3 master + S2) follows the Gold clock, downwards only; two-byte SPMI writes (lv_cpu_volt=1; default off; generator: xnu/src/mk_cpuvolt.py)
+lavender: the Gold rail (PM660 S3 master + S2) follows the Gold clock down; two-byte SPMI writes (default on, lv_cpu_volt=0 off; generator: xnu/src/mk_cpuvolt.py)
 
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 index 8e56cc2..734206a 100644
@@ -77,7 +77,7 @@ index 8e56cc2..734206a 100644
  static int
  spmi_update(unsigned addr, uint8_t mask, uint8_t bits)
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
-index 995ee9a..7d3d95a 100644
+index 995ee9a..e258f1f 100644
 --- a/iokit/Kernel/arm/LavenderMetrics.cpp
 +++ b/iokit/Kernel/arm/LavenderMetrics.cpp
 @@ -26,6 +26,8 @@ vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -166,7 +166,7 @@ index 995ee9a..7d3d95a 100644
 +static void
 +cv_start(void)
 +{
-+	uint32_t mode = 0, s2 = cv_read(0, 0x40), s3 = cv_read(1, 0x40);
++	uint32_t mode = 1, s2 = cv_read(0, 0x40), s3 = cv_read(1, 0x40);
 +
 +	(void)PE_parse_boot_argn("lv_cpu_volt", &mode, sizeof(mode));
 +	(void)PE_parse_boot_argn("lv_cpu_mv_lo", &cv_lo, sizeof(cv_lo));

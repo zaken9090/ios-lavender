@@ -1,7 +1,7 @@
-lavender: the stock voltage for the top Gold clocks through the array power mux, with the top mem-acc level at 2208 MHz (lv_cpu_volt=1 lv_cpu_volt_hi=1; default off; generator: xnu/src/mk_cpuvolthi.py)
+lavender: the stock voltage for the top Gold clocks through the array power mux, with the top mem-acc level at 2208 MHz (default on, lv_cpu_volt_hi=0 off; generator: xnu/src/mk_cpuvolthi.py)
 
 diff --git a/iokit/Kernel/arm/LavenderMetrics.cpp b/iokit/Kernel/arm/LavenderMetrics.cpp
-index 7d3d95a..e299c5d 100644
+index e258f1f..7f18813 100644
 --- a/iokit/Kernel/arm/LavenderMetrics.cpp
 +++ b/iokit/Kernel/arm/LavenderMetrics.cpp
 @@ -239,6 +239,32 @@ static bool quiet;                              /* lv_metrics=0: no lines, the g
@@ -12,7 +12,7 @@ index 7d3d95a..e299c5d 100644
 +#define CV_APM_MV       872u                    /* stock DT: qcom,apm-threshold-voltage */
 +#define CV_TOP_MV       960u
 +static volatile uint32_t *cv_apm;               /* 0x179d0000: +0x10 mode (2 = APC, 0 = MX), +0x18 status (& 0x1f: 3 / 0) */
-+static uint32_t cv_hi, cv_top, cv_1958 = 885, cv_2150 = 937, cv_2208 = 948;
++static uint32_t cv_hi = 1, cv_top, cv_1958 = 885, cv_2150 = 937, cv_2208 = 948;
 +static bool cv_apc;                             /* the arrays are on the APC rail */
 +/*
 + * The cores' memory settings ("mem-acc") have three levels by corner (stock OSM table, last column but one:

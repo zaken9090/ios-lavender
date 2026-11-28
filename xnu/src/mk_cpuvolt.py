@@ -14,7 +14,7 @@ writes to S2 are acknowledged and ignored: runs bb1, bc1; S1, the Silver rail, t
 Up: voltage first, 500 us, then the clock. Down: the clock first, then the voltage. A write that fails
 or does not read back puts the boot value back and turns this off for the boot.
 
-  lv_cpu_volt=1         on (default 0 until tested enough)
+  lv_cpu_volt=1         on, the default since 2026-11-28 (runs be1-be3, bh1-bh3, bk-bm: no failure); 0: the rail stays at the boot value
   lv_cpu_volt=2         test only: S3 4 mV down, what S2 and S3 then report, back up
   lv_cpu_mv_lo=768      mV at 1113 and 1401 MHz (768..boot)
   lv_cpu_mv_mid=828     mV at 1747 MHz (768..boot)
@@ -94,7 +94,7 @@ cv_for(uint32_t l)
 static void
 cv_start(void)
 {
-	uint32_t mode = 0, s2 = cv_read(0, 0x40), s3 = cv_read(1, 0x40);
+	uint32_t mode = 1, s2 = cv_read(0, 0x40), s3 = cv_read(1, 0x40);
 
 	(void)PE_parse_boot_argn("lv_cpu_volt", &mode, sizeof(mode));
 	(void)PE_parse_boot_argn("lv_cpu_mv_lo", &cv_lo, sizeof(cv_lo));

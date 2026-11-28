@@ -14,7 +14,10 @@ accepted). If the mux does not answer, the rail returns below the threshold and 
 the boot voltage as before. If the rail cannot be put back at all, the governor's top clock is pinned to
 where the clock is.
 
-  lv_cpu_volt_hi=1      on (default 0 until tested; needs lv_cpu_volt=1)
+  lv_cpu_volt_hi=1      on, the default since 2026-11-28 with the mem-acc level (runs bk1-bk3, bl1-bl2, bm1-bm2: three boots,
+                        ~230 s at 948 mV, no crash, no GPU recovery; 62-72 C under load against 57-60 at 868 mV); 0: the top
+                        clocks stay on the boot value. Needs lv_cpu_volt=1
+  lv_cpu_acc=0          never touch the mem-acc registers (then nothing above 937 mV)
 The LVF line's last field becomes "R mV apc|mx".
 
 usage: python mk_cpuvolthi.py XNU_TREE   (after mk_cpuvolt.py)
@@ -38,7 +41,7 @@ patch(m, '''static uint32_t cv_on, cv_boot, cv_now, cv_lo = 768, cv_mid = 828;
 #define CV_APM_MV       872u                    /* stock DT: qcom,apm-threshold-voltage */
 #define CV_TOP_MV       960u
 static volatile uint32_t *cv_apm;               /* 0x179d0000: +0x10 mode (2 = APC, 0 = MX), +0x18 status (& 0x1f: 3 / 0) */
-static uint32_t cv_hi, cv_top, cv_1958 = 885, cv_2150 = 937, cv_2208 = 948;
+static uint32_t cv_hi = 1, cv_top, cv_1958 = 885, cv_2150 = 937, cv_2208 = 948;
 static bool cv_apc;                             /* the arrays are on the APC rail */
 /*
  * The cores' memory settings ("mem-acc") have three levels by corner (stock OSM table, last column but one:
