@@ -401,3 +401,20 @@ The base builds the userland **locally on a Mac** — there is no workflow; we n
   the whole surface - CA redraws the whole screen nearly every frame, so copying out only the boxes
   drawn (patch_scandamage, tried) saves nothing (100 % in every second). Home stays GPU-bound (95 %):
   the next lever is the memory path of CA's own passes (GMEM / tiled rendering without flicker).
+- 2026-11-28 09:15, **the home screen is bound by memory latency, not bandwidth** (kernel 1170: LVV line
+  of VBIF counters, lv_vbif / lv_vbif_sweep; userland 46109624923 = canvas + scissor fix, installed).
+
+  | run | DDR / GPU | home | Settings | memory wait (home) |
+  |---|---|---|---|---|
+  | ah1 / ah3 | 1804.8 / 300 MHz | 21.1 / 22.2 fps | 59.7 / 59.5 | 225-230 cyc |
+  | ah4 | **1017.6** / 300 MHz | 21.0 fps | 48.7 | 225 cyc |
+  | ah6 | 1804.8 / **600** MHz | 24.6 fps | 59.0 | **497 cyc** |
+
+  CPU memcpy follows the DDR vote (1588 vs ~2500 MB/s), the home screen does not. A request waits
+  ~250 cycles at 300 MHz and ~550 at 600 even at 1-7 % GPU load: ~800 ns, fixed, in neither the GPU
+  core nor the DDR. 300 -> 600 MHz giving only +14 % fits ~3/4 of the frame's GPU time being that
+  wait. UCHE read traffic is small (~45 M beats/s). VBIF countables 102+103 = 104 = power counter 0 =
+  VBIF clock cycles (follow the GPU clock), 105 ~0.85 of it; no byte countable identified. GMEM would
+  not help a latency limit (and costs a restore/resolve per CA flush). Suspect: the GPU SMMU in front
+  of all GPU traffic, whose attach-impl-defs (DT arm,smmu-kgsl) Linux writes and we never did - xnu
+  1171 reads them (lv_smmu_impl=2) and writes the differing ones one by one (3).

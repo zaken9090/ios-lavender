@@ -57,6 +57,7 @@ jobs:
           python3 userland/gpu/patch_damage.py work/gpu/eagl.c
           python3 userland/gpu/patch_scanout.py work/gpu/eagl.c
           python3 userland/gpu/patch_flushwho.py work/gpu/eagl.c
+          python3 userland/gpu/patch_noflush.py work/gpu/eagl.c
           python3 userland/gpu/patch_noastc.py work/gpu/eagl.c
           python3 userland/gpu/patch_canvas.py work/gpu/eagl.c
           python3 userland/gpu/patch_bbdnano.py work/gpu/bbd_wrap.c
